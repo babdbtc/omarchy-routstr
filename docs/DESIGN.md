@@ -220,10 +220,11 @@ Primary action for v1: **Connect OpenCode**. Claude is a toggle: “Routes Claud
 **Panel**
 
 - Install / start state if the daemon is missing.
-- Top-up chips: 210 / 2100 / 21k sats → Lightning QR from `routstrd receive N`.
-- Optional paste `cashuA…` / `cashuB…`.
-- Integrations list (above).
-- Now: provider, model, last request cost (`routstrd usage`).
+- Top-up chips: 210 / 2100 / 21k sats → Lightning QR from `POST /wallet/receive/bolt11`, plus paste `cashuA…` / `cashuB…` (the private path).
+- Mint list with per-mint sats, add-mint, trust caveat; with >1 mint, rows pick where invoices land.
+- Integrations list (above) with explicit Claude / Pi / OpenClaw toggles.
+- Copy-`routstr/<id>` model dropdown; collapsed provider enable/disable list.
+- Now: model, last request cost (`/usage?limit=1`).
 - Low-balance copy that points at the QR, not at a docs page.
 
 **Service** (if needed)
@@ -266,14 +267,14 @@ Hard rules:
 
 Ship that. Use it for a week.
 
-### v2
+### v2 (implemented 2026-08-16, against routstrd 0.3.11)
 
-- Model / provider picker that does not fight `routstrd`’s refresh.
-- Paste Cashu.
-- Explicit Claude / Pi / OpenClaw toggles.
-- Tor egress toggle on the daemon (not transparent proxy of the whole desktop).
-- Prepaid tab in first-party `omarchy.agents`: the plugin service writes usage records straight into `~/.local/state/omarchy/agents/usage/` — the panel accepts records from any writer. A collector binary does not work: `omarchy-agent-usage-update` only discovers `omarchy-agent-usage-*` in root-owned `$OMARCHY_PATH/bin`. Copy the record shape from `omarchy-agent-usage-fireworks`, the prepaid precedent.
-- Mint picker / trust UI.
+- ~~Paste Cashu~~ — panel field in TOP UP posting to `/wallet/receive/cashu`. Token goes to curl over stdin, never argv or logs; the field clears before the request fires.
+- ~~Mint picker / trust UI~~ — scoped to what the daemon has: list (`/wallet/mints` ∪ `/balance` map), add (`POST /wallet/mints`), trust caveat copy. There is **no set-default or remove surface** — the active mint is cocod's first listed mint. The one real choice is the `mintUrl` on `POST /wallet/receive/bolt11`, so with >1 mint the rows select where Lightning top-ups land.
+- ~~Explicit Claude / Pi / OpenClaw toggles~~ — Connect rows per installed agent; Claude and OpenClaw confirm first (login hijack / default-model overwrite). Disconnect deletes the daemon client id, then jq-strips only our keys from the config (see DECISIONS.md "Surgical disconnect").
+- ~~Model / provider picker~~ — resolved as: provider enable/disable (collapsed PROVIDERS section) plus a copy-`routstr/<id>` dropdown. routstrd has **no default-model surface** (`small_model` and the Claude env models are hardcoded or positional), so a picker would fight `refreshModelsAndIntegrations` and lie.
+- ~~Prepaid tab in first-party `omarchy.agents`~~ — the service writes `routstr.json` into `~/.local/state/omarchy/agents/usage/` (atomic dotted-mktemp + mv, content-keyed dedupe across per-monitor instances), shaped like `omarchy-agent-usage-fireworks`: balance in currency `SAT`, `hasPromptStats: false` because requests are not prompts.
+- Tor egress toggle — **dropped**: no daemon surface exists (see DECISIONS.md).
 
 ### Out of scope
 
@@ -317,6 +318,17 @@ Implementation findings (v1, 2026-08-15):
 - Health polling is not gated on the CLI probe: a Docker routstrd answers on loopback with no `routstrd` on PATH. The CLI gates only actions (wire, start, stop).
 - IPC target `routstr`: `open/close/toggle/refresh/status/topup <sats>/wire`.
 - Testable without routstrd: point a mock HTTP server at `127.0.0.1:8008` serving `/health`, `/balance`, `/keys/balance`, `/models`, `/usage`, `POST /wallet/receive/bolt11`.
+
+Implementation findings (v2, 2026-08-16, routstrd 0.3.11):
+
+- Response envelope: every management route wraps in `{output: ...}` except `/health`, `/v1/models`, and the proxy catch-all; errors are non-200 + `{error}`. For endpoints whose error message matters (cashu redeem), run curl without `-f` and parse the body — `-f` discards it.
+- Mints: `/wallet/mints` is list/add/info only. The active mint is derived (cocod's first listed mint) and not settable; `/balance` carries `activeMint`.
+- Clients: `clients delete` (CLI and `POST /clients/delete`) removes only the daemon record. It never cleans integration files, and the daemon rewrites wired configs every 21 minutes (`refreshModelsAndIntegrations`) for every client id in its store — so disconnect must delete the id first, then clean the file. Backups: one `.bak-routstr-<ts>` beside each config before the first write, same as OpenCode.
+- Providers: `/providers` enable/disable is index-based and the list renumbers on Nostr refresh; resolve URL→index at POST time, never cache indices.
+- Secrets over stdin: a Cashu token (money until redeemed) rides `curl -d @-` via `Process.write()` with `stdinEnabled` flipped off after the write to close the pipe — argv is world-readable in `/proc`. Same pattern as the network panel's Wi-Fi passphrase.
+- Deploy loop: copying files into a live plugin dir triggers Quickshell hot reload, which segfaults in `IpcHandler::updateRegistration` (upstream bug, crash dialog per deploy). Kill the shell first: `quickshell kill -p /usr/share/omarchy/shell --any-display`, then cp, then `omarchy-restart-shell`.
+- Keyboard: panels taller than the height cap need `onMoveRequested` to scroll the Flickable; inline TextFields and open dropdown popups must set `PanelKeyCatcher.blocked`.
+- Usage record: `GET /usage/summary` (60s server cache) feeds the `omarchy.agents` record; the agents panel only rescans its directory when its own updater exits, so a brand-new record shows up after the next update cycle or shell restart.
 
 Official contract: `shell/README.md` and `shell/plugins/README.md` in the [Omarchy repo](https://github.com/basecamp/omarchy/tree/quattro); the manifest schema’s source of truth is `shell/services/PluginRegistry.qml`. Plus the [develop guide](https://omarchyplugins.com/develop.html) and [first-party plugins](https://github.com/basecamp/omarchy/tree/quattro/shell/plugins). There is no `manual/32-shell-plugins.md` in the shipped 4.0 tree — do not cite it.
 

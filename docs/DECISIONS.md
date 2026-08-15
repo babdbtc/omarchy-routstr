@@ -58,6 +58,30 @@ The daemon serves JSON on loopback: `/health`, `/balance`, `/models`, `/usage`. 
 
 `omarchy-agent-usage-update` discovers collectors only by globbing `$OMARCHY_PATH/bin/omarchy-agent-usage-*` — root-owned, closed to third parties. The agents panel accepts any record dropped in `~/.local/state/omarchy/agents/usage/`, so the plugin service writes the record itself, shaped like `omarchy-agent-usage-fireworks` output.
 
+### Tor egress toggle (v2 → dropped)
+
+routstrd 0.3.11 has no Tor surface to toggle. The bundled `@routstr/sdk` has a `torMode`, but it only *filters* provider URLs to `.onion` ones, `isTorContext()` requires a browser `window.location` and is always false under Bun, routstrd hardwires `bootstrapProviders(false)`, and there is no SOCKS dialer anywhere — all egress is plain `fetch`. A toggle in the panel would control nothing, and even a real `torMode` would be provider filtering, not anonymization. Revisit when routstrd grows an actual proxy config; do not fake it with a transparent-proxy hack around the daemon.
+
+### Default-model picker (v2 → copy affordance)
+
+No routstrd surface exists: OpenCode `small_model` is the hardcoded `routstr/minimax-m2.5`, Claude's `ANTHROPIC_DEFAULT_*_MODEL` are the first three entries of `/models` (Nostr-ordered), OpenClaw and Hermes are positional too, and `~/.routstrd/config.json` has no model key. Worse, the daemon rewrites every wired integration config on a 21-minute timer, so any model the plugin wrote would be clobbered. The panel ships provider enable/disable (a real daemon surface) and a dropdown that copies `routstr/<id>` for the user's own config instead.
+
+### Mint set-default / remove UI (v2 → invoice targeting)
+
+`/wallet/mints` is list/add/info only; the active mint is cocod's first listed mint, and neither routstrd nor the cocod client interface has removeMint or setDefault. A "default mint picker" would claim control the daemon does not offer. The daemon does accept `mintUrl` on `POST /wallet/receive/bolt11`, so the panel lets a multi-mint wallet choose where Lightning top-ups land, and stops there.
+
+### Hermes toggle (v2 → skipped)
+
+`clients add --hermes` appends to `~/.hermes/config.yaml` — YAML, so the jq-based surgical disconnect below does not apply, and the writer appends rather than merges (a reconnect after edits would duplicate the provider block). No clean disconnect means no toggle; revisit if routstrd grows a real remove.
+
+### Cashu / client-toggle IPC commands
+
+`omarchy-shell routstr topup <sats>` exists, but there is deliberately no `redeem <token>` and no `connect claude`: a token on an IPC command line lands in shell history and `ps`, and the Claude hijack must not be reachable without the confirm dialog. The panel is the only surface for both.
+
+### Disconnect via `routstrd clients delete` alone — replaced by surgical jq cleanup
+
+The one accepted exception to "never hand-edit agent configs from the plugin". `clients delete` removes only the daemon-side client record: the integration file keeps pointing at a revoked key, which for Claude Code means a broken agent that *still* bypasses the user's Anthropic login — strictly worse than either connected or disconnected. And restoring a `.bak` wholesale would clobber every settings change made since connect. So Disconnect deletes the client id first (which also stops the daemon's 21-minute integration rewriter from re-adding the block), then removes only our keys with jq — atomically via mktemp + mv, and for Claude only when `ANTHROPIC_BASE_URL` still points at this daemon, so a foreign or restored Anthropic setup is never touched. The hand-edit prohibition still holds for *adding* integrations: merging provider blocks stays `routstrd`'s job because its format drifts.
+
 ## Rejected auto-integration behaviors
 
 ### Auto-wire Claude Code
