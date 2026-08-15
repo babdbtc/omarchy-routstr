@@ -47,6 +47,13 @@ Item {
   property string topupMintUrl: ""
   property string _mintsRaw: ""
 
+  // ---- Providers and models. Provider toggling resolves URL -> index at
+  // POST time (Model.providerToggleScript) because the daemon renumbers
+  // its list on every Nostr refresh.
+  property var providerRows: []
+  property var modelOptions: []
+  property string providerBusyUrl: ""
+
   // Optimistic daemon toggle, tailscale-style: -1 follow reality, 0/1 while
   // a start/stop is catching up.
   property int _desired: -1
@@ -96,6 +103,7 @@ Item {
     || keysProcess.running || modelsProcess.running || usageProcess.running || wireProcess.running
     || invoiceProcess.running || qrProcess.running || cashuProcess.running
     || mintsProcess.running || addMintProcess.running || clientProcess.running
+    || providersProcess.running || providerToggleProcess.running
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
   readonly property int lowBalanceSats: intSetting("lowBalanceSats", 100, 0, 210000)
@@ -237,6 +245,11 @@ Item {
       if (panelOpen && !mintsProcess.running) {
         mintsProcess.command = curlGet("/wallet/mints", 5)
         mintsProcess.running = true
+        launched = true
+      }
+      if (panelOpen && !providersProcess.running) {
+        providersProcess.command = curlGet("/providers", 8)
+        providersProcess.running = true
         launched = true
       }
       // Not panel-gated: the agents-panel usage record should stay fresh
@@ -496,6 +509,22 @@ Item {
     if (topupMintUrl !== "") flashStatus("Invoices will mint into " + Model.hostOf(topupMintUrl))
   }
 
+  // ---- Providers / models --------------------------------------------------
+
+  function toggleProvider(url, disable) {
+    if (providerToggleProcess.running || !daemonUp) return
+    providerBusyUrl = String(url)
+    flashStatus((disable ? "Disabling " : "Enabling ") + Model.hostOf(url) + "…")
+    providerToggleProcess.command = ["bash", "-c", Model.providerToggleScript(url, disable, baseUrl)]
+    providerToggleProcess.running = true
+  }
+
+  function copyModelRef(id) {
+    if (String(id) === "") return
+    copyToClipboard("routstr/" + id)
+    flashStatus("Copied routstr/" + id)
+  }
+
   function addMint(rawUrl) {
     if (addMintProcess.running || !daemonUp) return
     var url = Model.normalizeMintUrl(rawUrl)
@@ -642,6 +671,7 @@ Item {
       if (usageProcess.running) usageProcess.running = false
       if (mintsProcess.running) mintsProcess.running = false
       if (summaryProcess.running) summaryProcess.running = false
+      if (providersProcess.running) providersProcess.running = false
     }
   }
 
@@ -790,7 +820,44 @@ Item {
     stdout: StdioCollector { id: modelsStdout; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode === 0) root.modelCount = Model.modelCount(modelsStdout.text)
+      if (exitCode === 0) {
+        root.modelCount = Model.modelCount(modelsStdout.text)
+        root.modelOptions = Model.modelOptions(modelsStdout.text)
+      }
+    }
+  }
+
+  Process {
+    id: providersProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: providersStdout; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.providerRows = Model.providerRows(providersStdout.text)
+    }
+  }
+
+  Process {
+    id: providerToggleProcess
+    running: false
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { id: providerToggleStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.providerBusyUrl = ""
+      if (exitCode === 0) {
+        root.lastError = ""
+      } else {
+        var reason = String(providerToggleStderr.text || "Could not change the provider").replace(/\s+/g, " ").trim()
+        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
+        root.flashStatus("")
+      }
+      // Re-read the authoritative list either way.
+      if (!providersProcess.running) {
+        providersProcess.command = root.curlGet("/providers", 8)
+        providersProcess.running = true
+      }
     }
   }
 
