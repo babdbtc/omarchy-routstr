@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.babdbtc.routstr",
+  "name": "Routstr",
+  "version": "0.0.0",
+  "author": "babdbtc",
+  "license": "MIT",
+  "description": "Fund Routstr and auto-wire OpenCode so Omarchy agents can buy inference with Lightning or Cashu. No account.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Routstr",
+    "description": "Balance, Lightning top-up, and OpenCode auto-integration for routstrd.",
+    "category": "Widgets",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "lowBalanceSats": 100,
+      "hideBalance": false,
+      "autoWireOpencode": true,
+      "defaultTopupSats": 2100
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "lowBalanceSats",
+        "type": "integer",
+        "label": "Low-balance warning (sats)",
+        "min": 0,
+        "max": 210000,
+        "step": 10,
+        "defaultValue": 100
+      },
+      {
+        "key": "hideBalance",
+        "type": "boolean",
+        "label": "Hide sats amount in the bar",
+        "defaultValue": false
+      },
+      {
+        "key": "autoWireOpencode",
+        "type": "boolean",
+        "label": "Auto-wire OpenCode when the daemon is up",
+        "defaultValue": true
+      },
+      {
+        "key": "defaultTopupSats",
+        "type": "integer",
+        "label": "Default top-up amount (sats)",
+        "min": 21,
+        "max": 210000,
+        "step": 21,
+        "defaultValue": 2100
+      }
+    ]
+  }
+}
