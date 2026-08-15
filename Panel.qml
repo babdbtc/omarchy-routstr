@@ -62,6 +62,32 @@ Panel {
     root.service.addMint(url)
   }
 
+  // ---- Connect confirmation. Claude Code replaces the Anthropic login;
+  // OpenClaw gets its default model overwritten. Neither happens on a
+  // bare click.
+  property string confirmClientId: ""
+  readonly property bool confirmOpen: confirmClientId !== ""
+
+  function requestConnect(clientId) {
+    if (!root.ready) return
+    if (clientId === "claude-code" || clientId === "openclaw") {
+      confirmDialog.selectedIndex = 1
+      confirmClientId = clientId
+    } else {
+      root.service.wireClient(clientId)
+    }
+  }
+
+  function confirmAccept() {
+    var id = confirmClientId
+    confirmClientId = ""
+    if (id !== "") root.service.wireClient(id)
+  }
+
+  function confirmCancel() {
+    confirmClientId = ""
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -78,12 +104,26 @@ Panel {
       // While an inline editor owns focus, keys must reach it (the
       // catcher's BeforeItem priority would eat them otherwise).
       blocked: cashuField.activeFocus || mintField.activeFocus
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-      onMoveRequested: function(dx, dy) {}
-      onActivateRequested: {}
+      onCloseRequested: {
+        if (root.confirmOpen) root.confirmCancel()
+        else root.close()
+      }
+      onTabRequested: function(direction) {
+        if (root.confirmOpen) confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+        else root.switchPanel(direction)
+      }
+      onMoveRequested: function(dx, dy) {
+        if (root.confirmOpen && dx !== 0)
+          confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+      }
+      onActivateRequested: {
+        if (root.confirmOpen) {
+          if (confirmDialog.selectedIndex === 1) root.confirmAccept()
+          else root.confirmCancel()
+        }
+      }
       onTextKey: function(t) {
-        if (!root.ready) return
+        if (!root.ready || root.confirmOpen) return
         if (t === "t" || t === "T") root.service.toggleDaemon()
         else if (t === "r" || t === "R") root.service.refresh(true)
         else if (t === "c" || t === "C") root.service.copyInvoice()
@@ -642,9 +682,46 @@ Panel {
               }
             }
 
+            AgentRow {
+              visible: root.ready && root.service.claudeInstalled
+              width: parent.width
+              clientId: "claude-code"
+              title: "Claude Code"
+              subtitle: root.ready && root.service.claudeWired
+                ? "Routing through Routstr — Anthropic login bypassed"
+                : "Using its own Anthropic login"
+              wired: root.ready && root.service.claudeWired
+            }
+
+            AgentRow {
+              visible: root.ready && root.service.piInstalled
+              width: parent.width
+              clientId: "pi-agent"
+              title: "Pi"
+              subtitle: {
+                if (!root.ready || !root.service.piWired) return "Not connected"
+                return "Connected · " + root.service.piModels + " model" + (root.service.piModels === 1 ? "" : "s")
+              }
+              wired: root.ready && root.service.piWired
+            }
+
+            AgentRow {
+              visible: root.ready && root.service.openclawInstalled
+              width: parent.width
+              clientId: "openclaw"
+              title: "OpenClaw"
+              subtitle: {
+                if (!root.ready || !root.service.openclawWired) return "Not connected"
+                var s = "Connected · " + root.service.openclawModels + " model" + (root.service.openclawModels === 1 ? "" : "s")
+                if (root.service.openclawDefaultIsRoutstr) s += " · default model set"
+                return s
+              }
+              wired: root.ready && root.service.openclawWired
+            }
+
             Text {
               width: parent.width
-              text: "Claude Code, Pi, and others: explicit toggles land in v2. Wiring is additive — your other providers stay untouched."
+              text: "Wiring is additive, except Claude Code: connecting it replaces the Anthropic login until you disconnect. First writes leave a .bak-routstr backup beside each config."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -692,6 +769,86 @@ Panel {
             wrapMode: Text.WordWrap
           }
         }
+      }
+
+      ConfirmDialog {
+        id: confirmDialog
+        anchors.fill: parent
+        z: 10
+        opened: root.confirmOpen
+        message: root.confirmClientId === "claude-code"
+          ? "Route Claude Code through Routstr? Its Anthropic login is replaced until you disconnect."
+          : "Connect OpenClaw? Its default model is switched to a Routstr model."
+        confirmText: "Connect"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.confirmCancel()
+        onConfirmed: root.confirmAccept()
+      }
+    }
+  }
+
+  // One explicitly-toggled agent: name, wiring state, Connect/Disconnect.
+  // Connect may route through the confirm dialog (root.requestConnect
+  // decides); Disconnect deletes the daemon client and surgically cleans
+  // the agent's config.
+  component AgentRow: CursorSurface {
+    id: agentRow
+    property string clientId: ""
+    property string title: ""
+    property string subtitle: ""
+    property bool wired: false
+    readonly property bool rowBusy: root.ready && root.service.clientBusyId === clientId
+
+    foreground: root.foreground
+    implicitHeight: agentRowInner.implicitHeight + Style.spacing.rowPaddingX
+
+    RowLayout {
+      id: agentRowInner
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(8)
+      spacing: Style.space(8)
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          Layout.fillWidth: true
+          text: agentRow.title
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: agentRow.subtitle
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      Button {
+        text: agentRow.rowBusy
+          ? (agentRow.wired ? "Removing…" : "Wiring…")
+          : (agentRow.wired ? "Disconnect" : "Connect")
+        iconSpinning: agentRow.rowBusy
+        iconText: agentRow.rowBusy ? "󰑓" : ""
+        bordered: true
+        enabled: root.ready && !agentRow.rowBusy && root.service.clientBusyId === "" && root.service.installed
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: agentRow.wired
+          ? root.service.disconnectClient(agentRow.clientId)
+          : root.requestConnect(agentRow.clientId)
       }
     }
   }

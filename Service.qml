@@ -60,6 +60,19 @@ Item {
   property bool _autoWireDone: false
   property bool _driftNotified: false
 
+  // ---- Explicit client toggles (never auto-wired)
+  property bool claudeInstalled: false
+  property bool piInstalled: false
+  property bool openclawInstalled: false
+  property bool claudeWired: false
+  property bool piWired: false
+  property int piModels: 0
+  property bool openclawWired: false
+  property int openclawModels: 0
+  property bool openclawDefaultIsRoutstr: false
+  // Client id (claude-code | pi-agent | openclaw) while its add/remove runs.
+  property string clientBusyId: ""
+
   // ---- Invoice
   property string invoiceText: ""
   property int invoiceSats: 0
@@ -82,7 +95,7 @@ Item {
   readonly property bool busy: probeProcess.running || healthProcess.running || balanceProcess.running
     || keysProcess.running || modelsProcess.running || usageProcess.running || wireProcess.running
     || invoiceProcess.running || qrProcess.running || cashuProcess.running
-    || mintsProcess.running || addMintProcess.running
+    || mintsProcess.running || addMintProcess.running || clientProcess.running
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
   readonly property int lowBalanceSats: intSetting("lowBalanceSats", 100, 0, 210000)
@@ -104,8 +117,12 @@ Item {
     + "command -v routstrd >/dev/null 2>&1 || ! command -v bun >/dev/null 2>&1 || { _g=\"$(bun pm bin -g 2>/dev/null)\"; [ -n \"$_g\" ] && export PATH=\"$_g:$PATH\"; }; "
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string qrPath: runtimeDir + "/omarchy-routstr-invoice.png"
+  readonly property string homeDir: Quickshell.env("HOME") || ""
   readonly property string opencodeConfigPath:
-    (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/opencode/opencode.json"
+    (Quickshell.env("XDG_CONFIG_HOME") || (homeDir + "/.config")) + "/opencode/opencode.json"
+  readonly property string claudeSettingsPath: homeDir + "/.claude/settings.json"
+  readonly property string piModelsPath: homeDir + "/.pi/agent/models.json"
+  readonly property string openclawConfigPath: homeDir + "/.openclaw/openclaw.json"
 
   property bool _wasUp: false
   property bool _wasLow: false
@@ -166,6 +183,9 @@ Item {
     // loopback with no `routstrd` on PATH.
     refreshDaemon()
     if (opencodeInstalled) opencodeConfig.reload()
+    if (claudeInstalled) claudeConfig.reload()
+    if (piInstalled) piConfig.reload()
+    if (openclawInstalled) openclawConfig.reload()
   }
 
   function probe() {
@@ -174,7 +194,10 @@ Item {
       + "command -v routstrd >/dev/null 2>&1 && echo routstrd=yes || echo routstrd=no; "
       + "[ -e \"$HOME/.routstrd/config.json\" ] && echo config=yes || echo config=no; "
       + "command -v opencode >/dev/null 2>&1 && echo opencode=yes || echo opencode=no; "
-      + "command -v bun >/dev/null 2>&1 && echo bun=yes || echo bun=no"]
+      + "command -v bun >/dev/null 2>&1 && echo bun=yes || echo bun=no; "
+      + "command -v claude >/dev/null 2>&1 && echo claude=yes || echo claude=no; "
+      + "{ command -v pi >/dev/null 2>&1 || [ -d \"$HOME/.pi/agent\" ]; } && echo pi=yes || echo pi=no; "
+      + "{ command -v openclaw >/dev/null 2>&1 || [ -e \"$HOME/.openclaw/openclaw.json\" ]; } && echo openclaw=yes || echo openclaw=no"]
     probeProcess.running = true
   }
 
@@ -354,6 +377,62 @@ Item {
       notify("drift", "Routstr provider removed from OpenCode",
         "Use Repair in the Routstr panel to reconnect, or ignore this if it was deliberate.")
     }
+  }
+
+  // ---- Explicit client toggles ---------------------------------------------
+  //
+  // Wire: back the target file up once, then let `routstrd clients add`
+  // own the merge (same contract as OpenCode). Disconnect is the part
+  // routstrd does not have — see Model.disconnectScript for the shape
+  // and the reasoning.
+
+  readonly property var clientSpecs: ({
+    "claude-code": { name: "Claude Code", flag: "--claude-code", path: claudeSettingsPath },
+    "pi-agent": { name: "Pi", flag: "--pi-agent", path: piModelsPath },
+    "openclaw": { name: "OpenClaw", flag: "--openclaw", path: openclawConfigPath }
+  })
+
+  function wireClient(id) {
+    var spec = clientSpecs[id]
+    if (!spec || clientProcess.running || !installed || !daemonUp) return
+    clientBusyId = id
+    clientProcess.clientId = id
+    clientProcess.verb = "connect"
+    flashStatus("Wiring " + spec.name + "…")
+    clientProcess.command = ["bash", "-lc",
+      pathPrelude
+      + "cfg=" + Util.shellQuote(spec.path) + "; "
+      + "if [ -f \"$cfg\" ]; then set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; fi; "
+      + "exec routstrd clients add " + spec.flag]
+    clientProcess.running = true
+  }
+
+  function disconnectClient(id) {
+    var spec = clientSpecs[id]
+    if (!spec || clientProcess.running || !daemonUp) return
+    clientBusyId = id
+    clientProcess.clientId = id
+    clientProcess.verb = "disconnect"
+    flashStatus("Disconnecting " + spec.name + "…")
+    // Script text lives in Model.js so the test suite executes the exact
+    // same bytes against fixture configs. Rationale for its shape is there.
+    clientProcess.command = ["bash", "-c", Model.disconnectScript(id, spec.path, baseUrl)]
+    clientProcess.running = true
+  }
+
+  function handleClientExit(id, verb, exitCode, errorText) {
+    var spec = clientSpecs[id] || { name: id }
+    if (exitCode === 0) {
+      lastError = ""
+      flashStatus(spec.name + (verb === "connect" ? " connected" : " disconnected"))
+    } else {
+      var reason = String(errorText || ("Could not " + verb + " " + spec.name)).replace(/\s+/g, " ").trim()
+      lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
+      flashStatus("")
+    }
+    if (id === "claude-code") claudeConfig.reload()
+    else if (id === "pi-agent") piConfig.reload()
+    else openclawConfig.reload()
   }
 
   // ---- Invoice -------------------------------------------------------------
@@ -566,6 +645,52 @@ Item {
     }
   }
 
+  FileView {
+    id: claudeConfig
+    path: root.claudeSettingsPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.claudeWired = Model.claudeState(text()).wired
+    onLoadFailed: root.claudeWired = false
+  }
+
+  FileView {
+    id: piConfig
+    path: root.piModelsPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var state = Model.piState(text())
+      root.piWired = state.wired
+      root.piModels = state.models
+    }
+    onLoadFailed: {
+      root.piWired = false
+      root.piModels = 0
+    }
+  }
+
+  FileView {
+    id: openclawConfig
+    path: root.openclawConfigPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var state = Model.openclawState(text())
+      root.openclawWired = state.wired
+      root.openclawModels = state.models
+      root.openclawDefaultIsRoutstr = state.defaultIsRoutstr
+    }
+    onLoadFailed: {
+      root.openclawWired = false
+      root.openclawModels = 0
+      root.openclawDefaultIsRoutstr = false
+    }
+  }
+
   // ---- Processes -----------------------------------------------------------
 
   Process {
@@ -579,6 +704,9 @@ Item {
       root.onboarded = out.indexOf("config=yes") !== -1
       root.opencodeInstalled = out.indexOf("opencode=yes") !== -1
       root.bunInstalled = out.indexOf("bun=yes") !== -1
+      root.claudeInstalled = out.indexOf("claude=yes") !== -1
+      root.piInstalled = out.indexOf("pi=yes") !== -1
+      root.openclawInstalled = out.indexOf("openclaw=yes") !== -1
       root.probed = true
       root.refreshDaemon()
     }
@@ -691,6 +819,24 @@ Item {
         root.qrStamp += 1
         root.invoiceQrReady = true
       }
+    }
+  }
+
+  Process {
+    id: clientProcess
+    property string clientId: ""
+    property string verb: ""
+    running: false
+    command: []
+    stdout: StdioCollector { id: clientStdout; waitForEnd: true }
+    stderr: StdioCollector { id: clientStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var id = clientId
+      var v = verb
+      clientId = ""
+      verb = ""
+      root.clientBusyId = ""
+      root.handleClientExit(id, v, exitCode, String(clientStderr.text || clientStdout.text || ""))
     }
   }
 
