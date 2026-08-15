@@ -128,6 +128,8 @@ Item {
   property bool _wasLow: false
   property string _balanceRaw: ""
   property string _keysRaw: ""
+  property string _summaryRaw: ""
+  property string _recordWrittenKey: ""
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -237,6 +239,13 @@ Item {
         mintsProcess.running = true
         launched = true
       }
+      // Not panel-gated: the agents-panel usage record should stay fresh
+      // in the background. The daemon caches this response for 60s.
+      if (!summaryProcess.running) {
+        summaryProcess.command = curlGet("/usage/summary", 8)
+        summaryProcess.running = true
+        launched = true
+      }
     }
     if (launched && !pollWatchdog.running) pollWatchdog.start()
   }
@@ -266,6 +275,32 @@ Item {
     // on the first of the two would notify with a partial number. Let the
     // dust settle, then judge once.
     if (previous >= 0) lowCheckTimer.restart()
+    maybeWriteUsageRecord()
+  }
+
+  // ---- omarchy.agents usage record ----------------------------------------
+  //
+  // One JSON record in ~/.local/state/omarchy/agents/usage/ makes Routstr a
+  // prepaid row in the first-party agents panel. Written atomically (dotted
+  // mktemp + mv, invisible to the panel's *.json discovery glob) and only
+  // when the content actually changed, so several per-monitor instances
+  // writing the same bytes stay harmless. Nothing is written until the
+  // daemon has answered — a machine without routstrd never grows the file.
+  function maybeWriteUsageRecord() {
+    if (!daemonUp || balanceSats < 0 || _summaryRaw === "" || recordProcess.running) return
+    var now = Date.now()
+    var record = Model.usageRecord(balanceSats, _summaryRaw, now)
+    if (record === null) return
+    var key = Model.usageRecordKey(record, now)
+    if (key === _recordWrittenKey) return
+    recordProcess.pendingKey = key
+    recordProcess.pendingBody = JSON.stringify(record)
+    recordProcess.stdinEnabled = true
+    recordProcess.command = ["bash", "-c",
+      "dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage\"; mkdir -p \"$dir\"; "
+      + "tmp=$(mktemp \"$dir/.routstr.json.XXXXXX\") || exit 1; "
+      + "if cat > \"$tmp\"; then mv \"$tmp\" \"$dir/routstr.json\"; else rm -f \"$tmp\"; exit 1; fi"]
+    recordProcess.running = true
   }
 
   function handleHealth(ok) {
@@ -606,6 +641,7 @@ Item {
       if (modelsProcess.running) modelsProcess.running = false
       if (usageProcess.running) usageProcess.running = false
       if (mintsProcess.running) mintsProcess.running = false
+      if (summaryProcess.running) summaryProcess.running = false
     }
   }
 
@@ -819,6 +855,37 @@ Item {
         root.qrStamp += 1
         root.invoiceQrReady = true
       }
+    }
+  }
+
+  Process {
+    id: summaryProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: summaryStdout; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      root._summaryRaw = summaryStdout.text
+      root.maybeWriteUsageRecord()
+    }
+  }
+
+  Process {
+    id: recordProcess
+    property string pendingKey: ""
+    property string pendingBody: ""
+    running: false
+    command: []
+    stdinEnabled: true
+    onStarted: {
+      write(pendingBody)
+      pendingBody = ""
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root._recordWrittenKey = pendingKey
+      pendingKey = ""
     }
   }
 

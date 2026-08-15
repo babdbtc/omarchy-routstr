@@ -276,6 +276,106 @@ function invoiceFrom(json) {
   return ""
 }
 
+// Usage record for the first-party omarchy.agents panel, shaped like
+// omarchy-agent-usage-fireworks output (the prepaid precedent). The panel
+// accepts records from any writer in the usage dir; a collector binary is
+// impossible (they are discovered only in root-owned $OMARCHY_PATH/bin).
+// Sats are reported as currency "SAT" — the panel prefixes unknown codes
+// verbatim. hasPromptStats is false because Routstr counts requests, and an
+// agent loop makes many requests per prompt; requests feed the day strip as
+// messageCount instead. `estimated` is true because funded is inferred as
+// remaining + spent, not a real ledger.
+function usageRecord(balanceSats, summaryJson, nowMs) {
+  var summary = unwrap(parseJson(summaryJson))
+  if (!summary || typeof summary !== "object") return null
+  var totals = summary.totals && typeof summary.totals === "object" ? summary.totals : null
+  var days = summary.days instanceof Array ? summary.days : []
+  var models = summary.models instanceof Array ? summary.models : []
+
+  function localDate(ms) {
+    var d = new Date(ms)
+    var m = d.getMonth() + 1
+    var day = d.getDate()
+    return d.getFullYear() + "-" + (m < 10 ? "0" + m : m) + "-" + (day < 10 ? "0" + day : day)
+  }
+
+  var byDate = {}
+  var activeDates = []
+  for (var i = 0; i < days.length; i++) {
+    var row = days[i]
+    if (!row || typeof row.date !== "string") continue
+    byDate[row.date] = row
+    if (Number(row.requests) > 0) activeDates.push(row.date)
+  }
+  activeDates.sort()
+
+  var recentDays = []
+  for (var back = 6; back >= 0; back--) {
+    var date = localDate(nowMs - back * 86400000)
+    var r = byDate[date]
+    recentDays.push({ date: date, messageCount: r ? (Number(r.requests) || 0) : 0 })
+  }
+
+  var today = byDate[localDate(nowMs)]
+  var modelUsage = {}
+  for (var j = 0; j < models.length; j++) {
+    var m = models[j]
+    if (!m || typeof m.modelId !== "string" || m.modelId === "") continue
+    modelUsage[m.modelId] = {
+      inputTokens: Number(m.promptTokens) || 0,
+      outputTokens: Number(m.completionTokens) || 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0
+    }
+  }
+
+  var spent = totals ? (Number(totals.satsCost) || 0) : 0
+  var remaining = Number(balanceSats)
+  if (!isFinite(remaining) || remaining < 0) remaining = 0
+
+  var record = {
+    schemaVersion: 1,
+    id: "routstr",
+    name: "Routstr",
+    updatedAt: new Date(nowMs).toISOString(),
+    ready: true,
+    hasLocalStats: true,
+    scope: "device",
+    hasPromptStats: false,
+    tierLabel: "Prepaid",
+    usageStatusText: "",
+    authHelpText: "",
+    limits: [],
+    todayPrompts: today ? (Number(today.requests) || 0) : 0,
+    todaySessions: 0,
+    todayTotalTokens: today ? (Number(today.totalTokens) || 0) : 0,
+    todayTokensByModel: {},
+    recentDays: recentDays,
+    totalPrompts: totals ? (Number(totals.requests) || 0) : 0,
+    totalSessions: 0,
+    activeDays: activeDates.length,
+    activeDates: activeDates,
+    modelUsage: modelUsage,
+    balance: {
+      remaining: remaining,
+      spent: spent,
+      currency: "SAT",
+      estimated: true
+    }
+  }
+  if (remaining + spent > 0) record.balance.funded = remaining + spent
+  return record
+}
+
+// Change key for the usage record: everything except updatedAt, plus a
+// half-hour bucket so a fresh timestamp still lands twice an hour.
+function usageRecordKey(record, nowMs) {
+  if (!record) return ""
+  var clone = JSON.parse(JSON.stringify(record))
+  delete clone.updatedAt
+  return JSON.stringify(clone) + "|" + Math.floor(nowMs / 1800000)
+}
+
 // Middle-elide long invoice strings for display.
 function elideMiddle(text, max) {
   var s = String(text || "")
