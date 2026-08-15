@@ -12,6 +12,13 @@ function parseJson(text) {
   }
 }
 
+// The live daemon wraps responses as { output: ... }; tolerate both that
+// and the bare shape.
+function unwrap(obj) {
+  if (obj && typeof obj === "object" && obj.output && typeof obj.output === "object") return obj.output
+  return obj
+}
+
 // "21000" -> "21 000" (thin spaces). Negative/unknown -> em dash.
 function formatSats(n) {
   if (n === undefined || n === null || !isFinite(n) || n < 0) return "—"
@@ -27,7 +34,7 @@ function formatSats(n) {
 // GET /balance -> { balances: { "<mintUrl>": sats } }. Returns total sats or
 // -1 when the shape is not recognized.
 function walletTotal(json) {
-  var obj = parseJson(json)
+  var obj = unwrap(parseJson(json))
   if (!obj || !obj.balances || typeof obj.balances !== "object") return -1
   var total = 0
   for (var mint in obj.balances) {
@@ -41,7 +48,7 @@ function walletTotal(json) {
 // balances parked on provider nodes still spend, so they count. Returns 0
 // when the endpoint is missing or empty — wallet total alone is then right.
 function keysTotal(json) {
-  var obj = parseJson(json)
+  var obj = unwrap(parseJson(json))
   if (!obj || !(obj.keys instanceof Array)) return 0
   var total = 0
   for (var i = 0; i < obj.keys.length; i++) {
@@ -55,7 +62,7 @@ function keysTotal(json) {
 
 // GET /models -> { models: [...] }. Returns count or -1 when unknown.
 function modelCount(json) {
-  var obj = parseJson(json)
+  var obj = unwrap(parseJson(json))
   if (!obj || !(obj.models instanceof Array)) return -1
   return obj.models.length
 }
@@ -97,10 +104,9 @@ function opencodeState(text) {
 
 // POST /wallet/receive/bolt11 -> { invoice, amount, mintUrl }
 function invoiceFrom(json) {
-  var obj = parseJson(json)
+  var obj = unwrap(parseJson(json))
   if (!obj) return ""
   if (typeof obj.invoice === "string" && obj.invoice !== "") return obj.invoice
-  if (obj.output && typeof obj.output === "object" && typeof obj.output.invoice === "string") return obj.output.invoice
   return ""
 }
 
