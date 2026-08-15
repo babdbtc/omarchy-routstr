@@ -68,9 +68,10 @@ Item {
   readonly property bool driftAlert: daemonUp && opencodeInstalled && _sawWired && !opencodeWired && !wireProcess.running
   readonly property bool alert: lowBalance || driftAlert
   readonly property bool wiring: wireProcess.running
+  readonly property bool receivingCashu: cashuProcess.running
   readonly property bool busy: probeProcess.running || healthProcess.running || balanceProcess.running
     || keysProcess.running || modelsProcess.running || usageProcess.running || wireProcess.running
-    || invoiceProcess.running || qrProcess.running
+    || invoiceProcess.running || qrProcess.running || cashuProcess.running
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
   readonly property int lowBalanceSats: intSetting("lowBalanceSats", 100, 0, 210000)
@@ -375,6 +376,52 @@ Item {
     if (invoiceText !== "") copyToClipboard(invoiceText)
   }
 
+  // ---- Cashu receive -------------------------------------------------------
+
+  // The token is money until the daemon swaps it at the mint. Hard rules:
+  // it goes to curl over stdin — never argv (readable in /proc), never a
+  // log line — and the one property that stages it is cleared the moment
+  // the process starts (the network panel's passphrase pattern). The
+  // caller clears its TextField before calling.
+  function receiveCashu(rawToken) {
+    if (cashuProcess.running || !daemonUp) return
+    var token = Model.normalizeCashuToken(rawToken)
+    if (token === "") {
+      lastError = "That doesn't look like a Cashu token (cashuA… / cashuB…)."
+      return
+    }
+    lastError = ""
+    flashStatus("Redeeming token…")
+    cashuProcess.pendingBody = JSON.stringify({ token: token })
+    token = ""
+    // No -f: on an HTTP error the daemon's {error} body is the message
+    // worth showing ("Invalid token", "already spent"), and -f discards it.
+    cashuProcess.command = ["curl", "-sS", "--max-time", "30",
+      "-X", "POST", "-H", "Content-Type: application/json",
+      "-d", "@-", baseUrl + "/wallet/receive/cashu"]
+    cashuProcess.stdinEnabled = true  // re-arm; each run closes it after writing
+    cashuProcess.running = true
+  }
+
+  function handleCashuExit(exitCode, stdoutText, stderrText) {
+    var result = Model.cashuResult(stdoutText)
+    if (exitCode === 0 && result.ok) {
+      lastError = ""
+      flashStatus(result.amountSats > 0
+        ? "Received " + Model.formatSats(result.amountSats) + " sats"
+        : "Token redeemed")
+      // An open Lightning invoice must not claim this deposit as its own:
+      // move its baseline past the cashu amount before the balance lands.
+      if (_invoiceBaseline >= 0 && result.amountSats > 0) _invoiceBaseline += result.amountSats
+      refreshDaemon()
+    } else {
+      var reason = result.error !== "" ? result.error
+        : Model.maskCashuTokens(String(stderrText || "Could not redeem the token").replace(/\s+/g, " ").trim())
+      lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
+      flashStatus("")
+    }
+  }
+
   // ---- Timers --------------------------------------------------------------
 
   Timer {
@@ -600,6 +647,25 @@ Item {
         root.qrStamp += 1
         root.invoiceQrReady = true
       }
+    }
+  }
+
+  Process {
+    id: cashuProcess
+    property string pendingBody: ""
+    running: false
+    command: []
+    stdinEnabled: true
+    onStarted: {
+      write(pendingBody)
+      pendingBody = ""
+      // curl -d @- reads to EOF; closing the write channel is what ends it.
+      stdinEnabled = false
+    }
+    stdout: StdioCollector { id: cashuStdout; waitForEnd: true }
+    stderr: StdioCollector { id: cashuStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.handleCashuExit(exitCode, cashuStdout.text, cashuStderr.text)
     }
   }
 

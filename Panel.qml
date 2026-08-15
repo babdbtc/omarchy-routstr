@@ -46,6 +46,14 @@ Panel {
     return false
   }
 
+  function submitCashu() {
+    if (!root.ready) return
+    var token = cashuField.text
+    cashuField.text = ""
+    keyCatcher.forceActiveFocus()
+    root.service.receiveCashu(token)
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -59,6 +67,9 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While an inline editor owns focus, keys must reach it (the
+      // catcher's BeforeItem priority would eat them otherwise).
+      blocked: cashuField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {}
@@ -273,6 +284,41 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            // Paste path: the private way in — no invoice, no metadata.
+            // The field is cleared before the token is handed to the
+            // service, so no QML property upstream of the request holds it.
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: cashuField
+                Layout.fillWidth: true
+                password: true
+                placeholderText: "Paste a Cashu token (cashuA…)"
+                foreground: root.foreground
+                font.family: root.fontFamily
+                enabled: root.ready && !root.service.receivingCashu
+                onAccepted: root.submitCashu()
+                Keys.onEscapePressed: {
+                  text = ""
+                  keyCatcher.forceActiveFocus()
+                }
+              }
+
+              Button {
+                text: root.ready && root.service.receivingCashu ? "Redeeming…" : "Redeem"
+                iconSpinning: root.ready && root.service.receivingCashu
+                iconText: root.ready && root.service.receivingCashu ? "󰑓" : ""
+                bordered: true
+                enabled: root.ready && !root.service.receivingCashu && cashuField.text !== ""
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.submitCashu()
               }
             }
 

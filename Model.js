@@ -102,6 +102,38 @@ function opencodeState(text) {
   return { exists: true, wired: true, models: models }
 }
 
+// A pasted Cashu token, with optional URI scheme prefixes stripped. Returns
+// the bare token, or "" when the paste is clearly not one (a Lightning
+// invoice, a URL, whitespace garbage). The daemon does the real validation.
+function normalizeCashuToken(raw) {
+  var s = String(raw || "").trim()
+  s = s.replace(/^web\+cashu:\/\//i, "").replace(/^cashu:\/\//i, "").replace(/^cashu:/i, "").trim()
+  if (!/^cashu[A-Za-z0-9]/.test(s)) return ""
+  if (/\s/.test(s)) return ""
+  return s
+}
+
+// Defense in depth for surfaced error text: a daemon/cocod message that
+// echoes the pasted token must not reach a label or a log line.
+function maskCashuTokens(text) {
+  return String(text || "").replace(/cashu[A-Za-z0-9+\/=_-]{8,}/g, "cashu…")
+}
+
+// POST /wallet/receive/cashu -> { output: { message, amount, unit } } on
+// success, { error } on failure (non-200; curl runs without -f so the body
+// still arrives). amount is decoded from the token; unit is sat or msat.
+function cashuResult(json) {
+  var raw = parseJson(json)
+  if (!raw) return { ok: false, amountSats: 0, error: "" }
+  if (raw.error) return { ok: false, amountSats: 0, error: maskCashuTokens(raw.error) }
+  var obj = unwrap(raw)
+  if (!obj || (obj.message === undefined && obj.amount === undefined))
+    return { ok: false, amountSats: 0, error: "" }
+  var amount = Number(obj.amount)
+  var sats = obj.unit === "msat" ? Math.floor(amount / 1000) : amount
+  return { ok: true, amountSats: isFinite(sats) && sats > 0 ? sats : 0, error: "" }
+}
+
 // POST /wallet/receive/bolt11 -> { invoice, amount, mintUrl }
 function invoiceFrom(json) {
   var obj = unwrap(parseJson(json))
