@@ -149,6 +149,82 @@ function latestUsage(json) {
   }
 }
 
+// Disconnect script for one explicit client. `routstrd clients delete` only
+// removes the daemon-side record; the integration file keeps pointing at a
+// revoked key, which for Claude Code means a broken agent that still
+// bypasses the user's Anthropic login. So: delete the client id first (that
+// also stops the daemon's 21-minute integration rewriter), then remove only
+// our keys from the file with jq, atomically, and only when they still point
+// at this daemon. The delete goes over HTTP because 404 — id already gone —
+// must count as success, and the CLI collapses it into a generic failure.
+// Pure function of its inputs so tests can execute the exact same script.
+function disconnectScript(id, configPath, baseUrl) {
+  var quotedPath = "'" + String(configPath).replace(/'/g, "'\\''") + "'"
+  var script =
+    "code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST"
+    + " -H 'Content-Type: application/json' -d '{\"id\":\"" + id + "\"}' "
+    + baseUrl + "/clients/delete); "
+    + "case \"$code\" in 200|404) ;; *) echo \"daemon refused the delete (HTTP $code)\" >&2; exit 1;; esac; "
+    + "cfg=" + quotedPath + "; [ -f \"$cfg\" ] || exit 0; "
+  var jqProgram
+  if (id === "claude-code") {
+    script +=
+      "jq -e '(.env.ANTHROPIC_BASE_URL // \"\") | test(\"^https?://(127\\\\.0\\\\.0\\\\.1|localhost):8008/?$\")' \"$cfg\" >/dev/null || exit 0; "
+    jqProgram =
+      "del(.env.ANTHROPIC_AUTH_TOKEN, .env.ANTHROPIC_BASE_URL, .env.ANTHROPIC_DEFAULT_OPUS_MODEL,"
+      + " .env.ANTHROPIC_DEFAULT_SONNET_MODEL, .env.ANTHROPIC_DEFAULT_HAIKU_MODEL)"
+      + " | if .env == {} then del(.env) else . end"
+  } else if (id === "pi-agent") {
+    jqProgram = "del(.providers.routstr)"
+  } else {
+    jqProgram =
+      "del(.models.providers.routstr)"
+      + " | if ((.agents.defaults.model.primary // \"\") | startswith(\"routstr/\")) then del(.agents.defaults.model) else . end"
+  }
+  script +=
+    "tmp=$(mktemp \"$cfg.XXXXXX\") || exit 1; "
+    + "if jq '" + jqProgram + "' \"$cfg\" > \"$tmp\"; then mv \"$tmp\" \"$cfg\"; else rm -f \"$tmp\"; exit 1; fi"
+  return script
+}
+
+// ~/.claude/settings.json -> is the Anthropic env hijacked toward the local
+// daemon. Only a BASE_URL that points at loopback:8008 counts as ours —
+// a corporate proxy or a real Anthropic setup must never be "wired".
+function claudeState(text) {
+  var obj = parseJson(text)
+  var env = obj && obj.env && typeof obj.env === "object" ? obj.env : null
+  var base = env ? String(env.ANTHROPIC_BASE_URL || "") : ""
+  var wired = /^https?:\/\/(127\.0\.0\.1|localhost):8008\/?$/.test(base)
+  return { wired: wired }
+}
+
+// ~/.pi/agent/models.json -> providers.routstr, additive.
+function piState(text) {
+  var obj = parseJson(text)
+  var provider = obj && obj.providers && typeof obj.providers === "object" ? obj.providers.routstr : null
+  if (!provider || typeof provider !== "object") return { wired: false, models: 0 }
+  var models = provider.models instanceof Array ? provider.models.length : 0
+  return { wired: true, models: models }
+}
+
+// ~/.openclaw/openclaw.json -> models.providers.routstr, plus whether the
+// default model block currently points at Routstr (clients add overwrites
+// agents.defaults.model; disconnect only clears it when it is still ours).
+function openclawState(text) {
+  var obj = parseJson(text)
+  var providers = obj && obj.models && typeof obj.models === "object"
+    && obj.models.providers && typeof obj.models.providers === "object" ? obj.models.providers : null
+  var provider = providers ? providers.routstr : null
+  var defaults = obj && obj.agents && typeof obj.agents === "object"
+    && obj.agents.defaults && typeof obj.agents.defaults === "object" ? obj.agents.defaults : null
+  var primary = defaults && defaults.model && typeof defaults.model === "object"
+    ? String(defaults.model.primary || "") : ""
+  if (!provider || typeof provider !== "object")
+    return { wired: false, models: 0, defaultIsRoutstr: primary.indexOf("routstr/") === 0 }
+  var models = provider.models instanceof Array ? provider.models.length : 0
+  return { wired: true, models: models, defaultIsRoutstr: primary.indexOf("routstr/") === 0 }
+}
+
 // ~/.config/opencode/opencode.json -> is provider.routstr present, and with
 // how many models. `exists` is false only when the text does not parse.
 function opencodeState(text) {
