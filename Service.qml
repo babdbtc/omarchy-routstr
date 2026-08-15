@@ -183,6 +183,12 @@ Item {
     if (actionStatus !== "") actionStatusTimer.restart()
   }
 
+  function setError(reason, fallback) {
+    var text = String(reason || fallback || "Something went wrong").replace(/\s+/g, " ").trim()
+    lastError = text.length > 140 ? text.substring(0, 137) + "…" : text
+    flashStatus("")
+  }
+
   // ---- Refresh cycle -------------------------------------------------------
 
   function refresh(force) {
@@ -474,9 +480,7 @@ Item {
       lastError = ""
       flashStatus(spec.name + (verb === "connect" ? " connected" : " disconnected"))
     } else {
-      var reason = String(errorText || ("Could not " + verb + " " + spec.name)).replace(/\s+/g, " ").trim()
-      lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
-      flashStatus("")
+      setError(errorText, "Could not " + verb + " " + spec.name)
     }
     if (id === "claude-code") claudeConfig.reload()
     else if (id === "pi-agent") piConfig.reload()
@@ -601,10 +605,8 @@ Item {
       if (_invoiceBaseline >= 0 && result.amountSats > 0) _invoiceBaseline += result.amountSats
       refreshDaemon()
     } else {
-      var reason = result.error !== "" ? result.error
-        : Model.maskCashuTokens(String(stderrText || "Could not redeem the token").replace(/\s+/g, " ").trim())
-      lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
-      flashStatus("")
+      setError(result.error !== "" ? result.error : Model.maskCashuTokens(String(stderrText || "")),
+        "Could not redeem the token")
     }
   }
 
@@ -846,13 +848,8 @@ Item {
     stderr: StdioCollector { id: providerToggleStderr; waitForEnd: true }
     onExited: function(exitCode) {
       root.providerBusyUrl = ""
-      if (exitCode === 0) {
-        root.lastError = ""
-      } else {
-        var reason = String(providerToggleStderr.text || "Could not change the provider").replace(/\s+/g, " ").trim()
-        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
-        root.flashStatus("")
-      }
+      if (exitCode === 0) root.lastError = ""
+      else root.setError(providerToggleStderr.text, "Could not change the provider")
       // Re-read the authoritative list either way.
       if (!providersProcess.running) {
         providersProcess.command = root.curlGet("/providers", 8)
@@ -883,10 +880,7 @@ Item {
         root.lastError = ""
         root.handleWired()
       } else {
-        var reason = String(wireStderr.text || wireStdout.text || "routstrd clients add failed")
-          .replace(/\s+/g, " ").trim()
-        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
-        root.flashStatus("")
+        root.setError(String(wireStderr.text || wireStdout.text || ""), "routstrd clients add failed")
       }
       delayedRefresh.restart()
     }
@@ -907,8 +901,7 @@ Item {
         root.renderQr()
       } else {
         root.invoiceSats = 0
-        var reason = String(invoiceStderr.text || "Could not create a Lightning invoice").replace(/\s+/g, " ").trim()
-        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
+        root.setError(invoiceStderr.text, "Could not create a Lightning invoice")
       }
     }
   }
@@ -1000,10 +993,7 @@ Item {
         root.flashStatus("Mint added")
         root.refreshDaemon()
       } else {
-        var reason = String((body && body.error) || addMintStderr.text || "Could not add the mint")
-          .replace(/\s+/g, " ").trim()
-        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
-        root.flashStatus("")
+        root.setError(String((body && body.error) || addMintStderr.text || ""), "Could not add the mint")
       }
     }
   }
@@ -1020,6 +1010,9 @@ Item {
       // curl -d @- reads to EOF; closing the write channel is what ends it.
       stdinEnabled = false
     }
+    // Belt for a spawn that never reaches onStarted: the staged token must
+    // not outlive the attempt in a property.
+    onRunningChanged: if (!running) pendingBody = ""
     stdout: StdioCollector { id: cashuStdout; waitForEnd: true }
     stderr: StdioCollector { id: cashuStderr; waitForEnd: true }
     onExited: function(exitCode) {

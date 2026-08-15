@@ -473,8 +473,10 @@ Panel {
           // say so instead of hiding it. There is no set-default surface in
           // routstrd — the one real choice is which mint invoices mint
           // into, so rows become selectable only once there is a choice.
+          // Visible whenever the daemon is up: a zero-mint wallet still
+          // needs the add field.
           Column {
-            visible: root.ready && root.service.daemonUp && root.service.mintRows.length > 0
+            visible: root.ready && root.service.daemonUp
             width: parent.width
             spacing: Style.space(10)
 
@@ -610,7 +612,7 @@ Panel {
           }
 
           PanelSeparator {
-            visible: root.ready && root.service.daemonUp && root.service.mintRows.length > 0
+            visible: root.ready && root.service.daemonUp
             foreground: root.foreground
           }
 
@@ -733,7 +735,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Wiring is additive, except Claude Code: connecting it replaces the Anthropic login until you disconnect. First writes leave a .bak-routstr backup beside each config."
+              text: "Wiring is additive, except Claude Code: connecting it replaces the Anthropic login until you disconnect. Disconnect removes only Routstr's keys — anything it overwrote lives in the .bak-routstr backup beside each config."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

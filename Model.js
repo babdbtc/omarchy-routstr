@@ -218,6 +218,10 @@ function disconnectScript(id, configPath, baseUrl) {
     + "cfg=" + quotedPath + "; [ -f \"$cfg\" ] || exit 0; "
   var jqProgram
   if (id === "claude-code") {
+    // Loopback:8008 is deliberately hardcoded here and in claudeState():
+    // deriving a guard regex from baseUrl would drop the localhost
+    // spelling and turn a safety check into string plumbing. If the
+    // daemon address ever becomes configurable, change both together.
     script +=
       "jq -e '(.env.ANTHROPIC_BASE_URL // \"\") | test(\"^https?://(127\\\\.0\\\\.0\\\\.1|localhost):8008/?$\")' \"$cfg\" >/dev/null || exit 0; "
     jqProgram =
@@ -231,8 +235,12 @@ function disconnectScript(id, configPath, baseUrl) {
       "del(.models.providers.routstr)"
       + " | if ((.agents.defaults.model.primary // \"\") | startswith(\"routstr/\")) then del(.agents.defaults.model) else . end"
   }
+  // Backup before the edit if none exists yet: connect makes one, but a
+  // user who wired via the CLI arrives here with no .bak, and this must
+  // not be the plugin's first un-backed-up write to their config.
   script +=
-    "tmp=$(mktemp \"$cfg.XXXXXX\") || exit 1; "
+    "set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; "
+    + "tmp=$(mktemp \"$cfg.XXXXXX\") || exit 1; "
     + "if jq '" + jqProgram + "' \"$cfg\" > \"$tmp\"; then mv \"$tmp\" \"$cfg\"; else rm -f \"$tmp\"; exit 1; fi"
   return script
 }
@@ -396,12 +404,14 @@ function usageRecord(balanceSats, summaryJson, nowMs) {
     usageStatusText: "",
     authHelpText: "",
     limits: [],
-    todayPrompts: today ? (Number(today.requests) || 0) : 0,
+    // Prompt counts stay zero, matching the fireworks precedent for
+    // hasPromptStats: false — requests land in recentDays.messageCount.
+    todayPrompts: 0,
     todaySessions: 0,
     todayTotalTokens: today ? (Number(today.totalTokens) || 0) : 0,
     todayTokensByModel: {},
     recentDays: recentDays,
-    totalPrompts: totals ? (Number(totals.requests) || 0) : 0,
+    totalPrompts: 0,
     totalSessions: 0,
     activeDays: activeDates.length,
     activeDates: activeDates,
