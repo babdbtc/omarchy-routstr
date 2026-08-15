@@ -79,6 +79,17 @@ Item {
   readonly property bool hideBalance: setting("hideBalance", false) === true
 
   readonly property string baseUrl: "http://127.0.0.1:8008"
+
+  // routstrd is a Bun global whose bin dir is wherever bun's global dir
+  // lands: ~/.bun/bin by default, ${XDG_CACHE_HOME}/.bun/bin when the XDG
+  // cache var is set (Omarchy sessions set it). Its shebang is
+  // `#!/usr/bin/env bun`, so bun itself must be on PATH too (mise shims).
+  // Login shells guarantee none of that; build the PATH ourselves for
+  // every CLI invocation, with `bun pm bin -g` as the tie-breaker for
+  // exotic configs.
+  readonly property string pathPrelude:
+    "export PATH=\"$HOME/.local/share/mise/shims:$HOME/.bun/bin:${XDG_CACHE_HOME:-$HOME/.cache}/.bun/bin:$PATH\"; "
+    + "command -v routstrd >/dev/null 2>&1 || ! command -v bun >/dev/null 2>&1 || { _g=\"$(bun pm bin -g 2>/dev/null)\"; [ -n \"$_g\" ] && export PATH=\"$_g:$PATH\"; }; "
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string qrPath: runtimeDir + "/omarchy-routstr-invoice.png"
   readonly property string opencodeConfigPath:
@@ -125,7 +136,7 @@ Item {
 
   function runInTerminal(script) {
     Quickshell.execDetached(["omarchy-launch-terminal", "bash", "-lc",
-      script + "; status=$?; printf '\\n[exit %s] press any key to close ' \"$status\"; read -r -n1 -s"])
+      pathPrelude + script + "; status=$?; printf '\\n[exit %s] press any key to close ' \"$status\"; read -r -n1 -s"])
   }
 
   function flashStatus(text) {
@@ -136,7 +147,9 @@ Item {
   // ---- Refresh cycle -------------------------------------------------------
 
   function refresh(force) {
-    if (!probeProcess.running && (force === true || !probed)) probe()
+    // Probe every tick: it is one short-lived bash, and it is what notices
+    // a routstrd install landing without the panel being reopened.
+    if (!probeProcess.running) probe()
     // Health is not gated on the CLI probe: a daemon in Docker answers on
     // loopback with no `routstrd` on PATH.
     refreshDaemon()
@@ -145,7 +158,8 @@ Item {
 
   function probe() {
     probeProcess.command = ["bash", "-lc",
-      "command -v routstrd >/dev/null 2>&1 && echo routstrd=yes || echo routstrd=no; "
+      pathPrelude
+      + "command -v routstrd >/dev/null 2>&1 && echo routstrd=yes || echo routstrd=no; "
       + "[ -e \"$HOME/.routstrd/config.json\" ] && echo config=yes || echo config=no; "
       + "command -v opencode >/dev/null 2>&1 && echo opencode=yes || echo opencode=no; "
       + "command -v bun >/dev/null 2>&1 && echo bun=yes || echo bun=no"]
@@ -242,7 +256,7 @@ Item {
     // life to this widget (and a watchdog reap would kill it).
     _desired = 1
     flashStatus("Starting daemon…")
-    Quickshell.execDetached(["bash", "-lc", "routstrd start"])
+    Quickshell.execDetached(["bash", "-lc", pathPrelude + "routstrd start"])
     startupRamp.ticks = 0
     startupRamp.running = true
     delayedRefresh.restart()
@@ -251,7 +265,7 @@ Item {
   function stopDaemon() {
     _desired = 0
     flashStatus("Stopping daemon…")
-    Quickshell.execDetached(["bash", "-lc", "routstrd stop"])
+    Quickshell.execDetached(["bash", "-lc", pathPrelude + "routstrd stop"])
     delayedRefresh.restart()
   }
 
@@ -288,7 +302,8 @@ Item {
     flashStatus("Wiring OpenCode…")
     // Backup once before the first write, then let routstrd own the merge.
     wireProcess.command = ["bash", "-lc",
-      "cfg=\"${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json\"; "
+      pathPrelude
+      + "cfg=\"${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json\"; "
       + "if [ -f \"$cfg\" ]; then set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; fi; "
       + "exec routstrd clients add --opencode"]
     wireProcess.running = true
