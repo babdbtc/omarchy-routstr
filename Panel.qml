@@ -54,6 +54,14 @@ Panel {
     root.service.receiveCashu(token)
   }
 
+  function submitMint() {
+    if (!root.ready) return
+    var url = mintField.text
+    mintField.text = ""
+    keyCatcher.forceActiveFocus()
+    root.service.addMint(url)
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -69,7 +77,7 @@ Panel {
       anchors.fill: parent
       // While an inline editor owns focus, keys must reach it (the
       // catcher's BeforeItem priority would eat them otherwise).
-      blocked: cashuField.activeFocus
+      blocked: cashuField.activeFocus || mintField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {}
@@ -406,6 +414,151 @@ Panel {
 
           PanelSeparator {
             visible: root.ready && root.service.daemonUp
+            foreground: root.foreground
+          }
+
+          // ---- Mint: where the sats actually live. Cashu is mint trust;
+          // say so instead of hiding it. There is no set-default surface in
+          // routstrd — the one real choice is which mint invoices mint
+          // into, so rows become selectable only once there is a choice.
+          Column {
+            visible: root.ready && root.service.daemonUp && root.service.mintRows.length > 0
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "MINT"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Repeater {
+              model: root.ready ? root.service.mintRows : []
+
+              CursorSurface {
+                id: mintRow
+                required property var modelData
+                readonly property bool selectable: root.service.mintRows.length > 1
+                readonly property string effectiveTopup: root.service.topupMintUrl !== ""
+                  ? root.service.topupMintUrl : root.service.activeMint
+                readonly property bool topupTarget: selectable && modelData.url === effectiveTopup
+
+                width: parent.width
+                foreground: root.foreground
+                hasCursor: selectable && mintRowMouse.containsMouse
+                implicitHeight: mintRowInner.implicitHeight + Style.spacing.rowPaddingX
+
+                MouseArea {
+                  id: mintRowMouse
+                  anchors.fill: parent
+                  enabled: mintRow.selectable
+                  hoverEnabled: mintRow.selectable
+                  cursorShape: mintRow.selectable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: root.service.selectTopupMint(mintRow.modelData.url)
+                }
+
+                RowLayout {
+                  id: mintRowInner
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Style.space(1)
+
+                    Text {
+                      Layout.fillWidth: true
+                      text: mintRow.modelData.host
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      Layout.fillWidth: true
+                      text: {
+                        var parts = [Model.formatSats(mintRow.modelData.sats) + " sats"]
+                        if (mintRow.modelData.active) parts.push("active mint")
+                        if (mintRow.topupTarget) parts.push("top-ups land here")
+                        return parts.join(" · ")
+                      }
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                  }
+
+                  Text {
+                    visible: mintRow.topupTarget
+                    text: "󰄬"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.icon
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.ready && root.service.mintRows.length > 1
+              width: parent.width
+              text: "Click a mint to choose where Lightning top-ups land. The active mint is fixed by the wallet."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: mintField
+                Layout.fillWidth: true
+                placeholderText: "Add a mint (https://…)"
+                foreground: root.foreground
+                font.family: root.fontFamily
+                enabled: root.ready && !root.service.addingMint
+                onAccepted: root.submitMint()
+                Keys.onEscapePressed: {
+                  text = ""
+                  keyCatcher.forceActiveFocus()
+                }
+              }
+
+              Button {
+                text: root.ready && root.service.addingMint ? "Adding…" : "Add"
+                iconSpinning: root.ready && root.service.addingMint
+                iconText: root.ready && root.service.addingMint ? "󰑓" : ""
+                bordered: true
+                enabled: root.ready && !root.service.addingMint && mintField.text !== ""
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.submitMint()
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Your balance is IOUs from the mint that issued it — trust the mint before parking sats there."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          PanelSeparator {
+            visible: root.ready && root.service.daemonUp && root.service.mintRows.length > 0
             foreground: root.foreground
           }
 
