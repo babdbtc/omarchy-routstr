@@ -38,6 +38,15 @@ Item {
   property var lastUsage: null
   property bool refreshing: false
 
+  // ---- Mints. The active mint is cocod's first listed mint — routstrd has
+  // no set-default or remove surface (verified against 0.3.11). The only
+  // real choice is which mint a Lightning invoice mints into, so that is
+  // the choice this exposes; empty means the daemon default.
+  property string activeMint: ""
+  property var mintRows: []
+  property string topupMintUrl: ""
+  property string _mintsRaw: ""
+
   // Optimistic daemon toggle, tailscale-style: -1 follow reality, 0/1 while
   // a start/stop is catching up.
   property int _desired: -1
@@ -69,9 +78,11 @@ Item {
   readonly property bool alert: lowBalance || driftAlert
   readonly property bool wiring: wireProcess.running
   readonly property bool receivingCashu: cashuProcess.running
+  readonly property bool addingMint: addMintProcess.running
   readonly property bool busy: probeProcess.running || healthProcess.running || balanceProcess.running
     || keysProcess.running || modelsProcess.running || usageProcess.running || wireProcess.running
     || invoiceProcess.running || qrProcess.running || cashuProcess.running
+    || mintsProcess.running || addMintProcess.running
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
   readonly property int lowBalanceSats: intSetting("lowBalanceSats", 100, 0, 210000)
@@ -198,6 +209,11 @@ Item {
         usageProcess.running = true
         launched = true
       }
+      if (panelOpen && !mintsProcess.running) {
+        mintsProcess.command = curlGet("/wallet/mints", 5)
+        mintsProcess.running = true
+        launched = true
+      }
     }
     if (launched && !pollWatchdog.running) pollWatchdog.start()
   }
@@ -210,6 +226,8 @@ Item {
     if (_balanceRaw === "") return
     var wallet = Model.walletTotal(_balanceRaw)
     if (wallet < 0) return
+    activeMint = Model.activeMintFrom(_balanceRaw)
+    mintRows = Model.mintRows(_mintsRaw, _balanceRaw)
     var total = wallet + Model.keysTotal(_keysRaw)
     var previous = balanceSats
     balanceSats = total
@@ -348,11 +366,36 @@ Item {
     _invoiceBaseline = balanceSats
     _invoiceStartedMs = Date.now()
     flashStatus("Creating invoice…")
+    var body = { amount: amount }
+    if (topupMintUrl !== "") body.mintUrl = topupMintUrl
     invoiceProcess.command = ["curl", "-fsS", "--max-time", "15",
       "-X", "POST", "-H", "Content-Type: application/json",
-      "-d", JSON.stringify({ amount: amount }),
+      "-d", JSON.stringify(body),
       baseUrl + "/wallet/receive/bolt11"]
     invoiceProcess.running = true
+  }
+
+  // ---- Mints ---------------------------------------------------------------
+
+  function selectTopupMint(url) {
+    topupMintUrl = String(url || "")
+    if (topupMintUrl !== "") flashStatus("Invoices will mint into " + Model.hostOf(topupMintUrl))
+  }
+
+  function addMint(rawUrl) {
+    if (addMintProcess.running || !daemonUp) return
+    var url = Model.normalizeMintUrl(rawUrl)
+    if (url === "") {
+      lastError = "Mint URLs look like https://mint.example.org"
+      return
+    }
+    lastError = ""
+    flashStatus("Adding mint…")
+    addMintProcess.command = ["curl", "-sS", "--max-time", "20",
+      "-X", "POST", "-H", "Content-Type: application/json",
+      "-d", JSON.stringify({ url: url }),
+      baseUrl + "/wallet/mints"]
+    addMintProcess.running = true
   }
 
   function renderQr() {
@@ -483,6 +526,7 @@ Item {
       if (keysProcess.running) keysProcess.running = false
       if (modelsProcess.running) modelsProcess.running = false
       if (usageProcess.running) usageProcess.running = false
+      if (mintsProcess.running) mintsProcess.running = false
     }
   }
 
@@ -646,6 +690,40 @@ Item {
       if (exitCode === 0) {
         root.qrStamp += 1
         root.invoiceQrReady = true
+      }
+    }
+  }
+
+  Process {
+    id: mintsProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: mintsStdout; waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      root._mintsRaw = mintsStdout.text
+      root.mintRows = Model.mintRows(root._mintsRaw, root._balanceRaw)
+    }
+  }
+
+  Process {
+    id: addMintProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: addMintStdout; waitForEnd: true }
+    stderr: StdioCollector { id: addMintStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var body = Model.parseJson(addMintStdout.text)
+      if (exitCode === 0 && body && !body.error) {
+        root.lastError = ""
+        root.flashStatus("Mint added")
+        root.refreshDaemon()
+      } else {
+        var reason = String((body && body.error) || addMintStderr.text || "Could not add the mint")
+          .replace(/\s+/g, " ").trim()
+        root.lastError = reason.length > 140 ? reason.substring(0, 137) + "…" : reason
+        root.flashStatus("")
       }
     }
   }

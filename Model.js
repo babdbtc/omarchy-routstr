@@ -44,6 +44,64 @@ function walletTotal(json) {
   return total
 }
 
+// GET /balance -> { balances: { "<mintUrl>": sats }, activeMint }. The active
+// mint is derived state (cocod's first listed mint), not settable.
+function activeMintFrom(json) {
+  var obj = unwrap(parseJson(json))
+  if (!obj || typeof obj.activeMint !== "string") return ""
+  return obj.activeMint
+}
+
+function hostOf(url) {
+  var s = String(url || "").replace(/^[a-z+]+:\/\//i, "")
+  var slash = s.indexOf("/")
+  if (slash !== -1) s = s.substring(0, slash)
+  return s
+}
+
+// GET /wallet/mints + GET /balance -> display rows. The mints list is the
+// authoritative membership; the balance map contributes per-mint sats (a
+// mint can hold funds while missing from the list if cocod's listMints
+// hiccups, so union both).
+function mintRows(mintsJson, balanceJson) {
+  var mintsObj = unwrap(parseJson(mintsJson))
+  var balanceObj = unwrap(parseJson(balanceJson))
+  var urls = []
+  if (mintsObj && mintsObj.mints instanceof Array) {
+    for (var i = 0; i < mintsObj.mints.length; i++) {
+      var u = String(mintsObj.mints[i] || "")
+      if (u !== "" && urls.indexOf(u) === -1) urls.push(u)
+    }
+  }
+  var balances = balanceObj && balanceObj.balances && typeof balanceObj.balances === "object"
+    ? balanceObj.balances : {}
+  for (var mint in balances) {
+    if (urls.indexOf(mint) === -1) urls.push(mint)
+  }
+  var active = (mintsObj && typeof mintsObj.activeMint === "string" && mintsObj.activeMint !== "")
+    ? mintsObj.activeMint
+    : (balanceObj && typeof balanceObj.activeMint === "string" ? balanceObj.activeMint : "")
+  var rows = []
+  for (var j = 0; j < urls.length; j++) {
+    var sats = Number(balances[urls[j]])
+    rows.push({
+      url: urls[j],
+      host: hostOf(urls[j]),
+      sats: isFinite(sats) ? sats : 0,
+      active: urls[j] === active
+    })
+  }
+  return rows
+}
+
+// A pasted mint URL. Mints are https endpoints; anything else is a typo.
+function normalizeMintUrl(raw) {
+  var s = String(raw || "").trim().replace(/\/+$/, "")
+  if (s === "") return ""
+  if (!/^https?:\/\/[^\s\/]+\.[^\s\/]{2,}/.test(s)) return ""
+  return s
+}
+
 // GET /keys/balance -> { keys: [{ id: "apikey:...", balance }] }. Session
 // balances parked on provider nodes still spend, so they count. Returns 0
 // when the endpoint is missing or empty — wallet total alone is then right.
