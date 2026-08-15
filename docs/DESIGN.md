@@ -306,7 +306,17 @@ qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
 
 `omarchy plugin validate` is the real gate (schema, entry-point files exist, no symlinks). `qmllint` cannot resolve Quickshell imports from that include path — treat its unresolved-import warnings as noise, not failures.
 
-Hot reload: saving under `~/.config/omarchy/plugins/` reloads the plugin. Force: `omarchy-shell shell rescanPlugins`.
+Hot reload: saving under `~/.config/omarchy/plugins/` reloads the *registry*, but a bar widget already mounted keeps running its old item (observed on 4.0.0.alpha; disable/enable does not replace it either). The reliable dev loop is `omarchy-restart-shell` (~2s). `omarchy-shell shell rescanPlugins` still helps for manifest-level changes.
+
+Implementation findings (v1, 2026-08-15):
+
+- Bar balance = wallet total (`/balance`) + `apikey:` session balances (`/keys/balance`) — matches the `routstrd balance` grand total. The two land in separate responses; debounce low-balance judgement until both settle.
+- One bar surface exists per monitor, so every Service instance sees the same edge at once; notifications dedupe through an atomic `mkdir` guard in `$XDG_RUNTIME_DIR`.
+- `routstrd start`/`stop` go through `Quickshell.execDetached` — holding them in a `Process` would tie the daemon's lifetime to the widget.
+- All CLI calls run under `bash -lc` so Bun's global bin dir is on PATH inside `omarchy-shell`.
+- Health polling is not gated on the CLI probe: a Docker routstrd answers on loopback with no `routstrd` on PATH. The CLI gates only actions (wire, start, stop).
+- IPC target `routstr`: `open/close/toggle/refresh/status/topup <sats>/wire`.
+- Testable without routstrd: point a mock HTTP server at `127.0.0.1:8008` serving `/health`, `/balance`, `/keys/balance`, `/models`, `/usage`, `POST /wallet/receive/bolt11`.
 
 Official contract: `shell/README.md` and `shell/plugins/README.md` in the [Omarchy repo](https://github.com/basecamp/omarchy/tree/quattro); the manifest schema’s source of truth is `shell/services/PluginRegistry.qml`. Plus the [develop guide](https://omarchyplugins.com/develop.html) and [first-party plugins](https://github.com/basecamp/omarchy/tree/quattro/shell/plugins). There is no `manual/32-shell-plugins.md` in the shipped 4.0 tree — do not cite it.
 
