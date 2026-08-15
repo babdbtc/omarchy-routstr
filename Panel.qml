@@ -62,6 +62,8 @@ Panel {
     root.service.addMint(url)
   }
 
+  property bool providersExpanded: false
+
   // ---- Connect confirmation. Claude Code replaces the Anthropic login;
   // OpenClaw gets its default model overwritten. Neither happens on a
   // bare click.
@@ -103,7 +105,7 @@ Panel {
       anchors.fill: parent
       // While an inline editor owns focus, keys must reach it (the
       // catcher's BeforeItem priority would eat them otherwise).
-      blocked: cashuField.activeFocus || mintField.activeFocus
+      blocked: cashuField.activeFocus || mintField.activeFocus || modelDropdown.popupOpen
       onCloseRequested: {
         if (root.confirmOpen) root.confirmCancel()
         else root.close()
@@ -113,8 +115,17 @@ Panel {
         else root.switchPanel(direction)
       }
       onMoveRequested: function(dx, dy) {
-        if (root.confirmOpen && dx !== 0)
-          confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+        if (root.confirmOpen) {
+          if (dx !== 0)
+            confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+          return
+        }
+        // No cursor model in this panel; vertical motion scrolls the column
+        // so content past the height cap stays reachable by keyboard.
+        if (dy !== 0) {
+          var limit = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+          panelFlick.contentY = Math.max(0, Math.min(limit, panelFlick.contentY + dy * Style.space(64)))
+        }
       }
       onActivateRequested: {
         if (root.confirmOpen) {
@@ -127,6 +138,7 @@ Panel {
         if (t === "t" || t === "T") root.service.toggleDaemon()
         else if (t === "r" || t === "R") root.service.refresh(true)
         else if (t === "c" || t === "C") root.service.copyInvoice()
+        else if (t === "p" || t === "P") root.providersExpanded = !root.providersExpanded
       }
 
       Flickable {
@@ -722,6 +734,162 @@ Panel {
             Text {
               width: parent.width
               text: "Wiring is additive, except Claude Code: connecting it replaces the Anthropic login until you disconnect. First writes leave a .bak-routstr backup beside each config."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          // ---- Models: what to type in an agent config. There is no
+          // default-model surface in routstrd (small_model and the Claude
+          // env models are hardcoded or positional), so this is a copy
+          // affordance, not a picker that would fight the daemon's own
+          // 21-minute integration rewrites.
+          Column {
+            visible: root.ready && root.service.daemonUp && root.service.modelOptions.length > 0
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "MODELS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            SearchableDropdown {
+              id: modelDropdown
+              width: parent.width
+              options: root.ready ? root.service.modelOptions : []
+              value: ""
+              triggerLabel: "Copy a model id…"
+              placeholderText: "Search models…"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onChanged: function(v) {
+                root.service.copyModelRef(v)
+                value = ""
+              }
+            }
+
+            Text {
+              width: parent.width
+              text: "Agent configs reference models as routstr/<id>. Picking one copies that."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          // ---- Providers: who actually serves the requests. Disable is
+          // the only lever routstrd offers; routing skips disabled nodes.
+          Column {
+            visible: root.ready && root.service.daemonUp && root.service.providerRows.length > 0
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "PROVIDERS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            CursorSurface {
+              id: providersHeader
+              width: parent.width
+              foreground: root.foreground
+              hasCursor: providersHeaderMouse.containsMouse
+              implicitHeight: providersHeaderInner.implicitHeight + Style.spacing.rowPaddingX
+
+              MouseArea {
+                id: providersHeaderMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.providersExpanded = !root.providersExpanded
+              }
+
+              RowLayout {
+                id: providersHeaderInner
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(10)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(8)
+
+                Text {
+                  Layout.fillWidth: true
+                  text: {
+                    if (!root.ready) return ""
+                    var rows = root.service.providerRows
+                    var off = 0
+                    for (var i = 0; i < rows.length; i++) if (rows[i].disabled) off++
+                    return rows.length + " provider" + (rows.length === 1 ? "" : "s")
+                      + (off > 0 ? " · " + off + " disabled" : "")
+                  }
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  text: root.providersExpanded ? "󰅃" : "󰅀"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.icon
+                  Layout.alignment: Qt.AlignVCenter
+                }
+              }
+            }
+
+            Repeater {
+              model: root.ready && root.providersExpanded ? root.service.providerRows : []
+
+              CursorSurface {
+                id: providerRow
+                required property var modelData
+                readonly property bool rowBusy: root.service.providerBusyUrl === modelData.url
+
+                width: parent.width
+                foreground: root.foreground
+                implicitHeight: providerRowInner.implicitHeight + Style.spacing.rowPaddingX
+
+                RowLayout {
+                  id: providerRowInner
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  Text {
+                    Layout.fillWidth: true
+                    text: providerRow.modelData.host
+                    color: providerRow.modelData.disabled ? root.dim : root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideRight
+                  }
+
+                  ToggleSwitch {
+                    checked: !providerRow.modelData.disabled
+                    busy: providerRow.rowBusy
+                    foreground: root.foreground
+                    Layout.alignment: Qt.AlignVCenter
+                    onToggled: root.service.toggleProvider(providerRow.modelData.url, !providerRow.modelData.disabled)
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.providersExpanded
+              width: parent.width
+              text: "Requests route around disabled providers. Discovery may renumber or re-add providers over time."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

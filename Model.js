@@ -125,6 +125,56 @@ function modelCount(json) {
   return obj.models.length
 }
 
+// GET /models -> options for a searchable dropdown. value/label are the raw
+// id (what agent configs reference as routstr/<id>), description the
+// human name.
+function modelOptions(json) {
+  var obj = unwrap(parseJson(json))
+  if (!obj || !(obj.models instanceof Array)) return []
+  var options = []
+  for (var i = 0; i < obj.models.length; i++) {
+    var m = obj.models[i]
+    if (!m || typeof m.id !== "string" || m.id === "") continue
+    options.push({ value: m.id, label: m.id, description: String(m.name || "") })
+  }
+  return options
+}
+
+// GET /providers -> { providers: [{index, baseUrl, disabled}], ... }.
+function providerRows(json) {
+  var obj = unwrap(parseJson(json))
+  if (!obj || !(obj.providers instanceof Array)) return []
+  var rows = []
+  for (var i = 0; i < obj.providers.length; i++) {
+    var p = obj.providers[i]
+    if (!p || typeof p.baseUrl !== "string" || p.baseUrl === "") continue
+    rows.push({
+      url: p.baseUrl,
+      host: hostOf(p.baseUrl),
+      disabled: p.disabled === true
+    })
+  }
+  return rows
+}
+
+// Enable/disable one provider. The daemon's toggle endpoints take indices
+// into its *current* provider list, and a Nostr refresh replaces that list
+// wholesale — a remembered index can silently hit the wrong provider. So
+// the script re-reads /providers and resolves the URL to an index in the
+// same breath as the POST. Pure function of its inputs, tested as-is.
+function providerToggleScript(url, disable, baseUrl) {
+  var quotedUrl = "'" + String(url).replace(/'/g, "'\\''") + "'"
+  var verb = disable ? "disable" : "enable"
+  return "list=$(curl -sS --max-time 8 " + baseUrl + "/providers) || exit 1; "
+    + "idx=$(printf %s \"$list\" | jq -r --arg u " + quotedUrl + " "
+    + "'(.output // .) | .providers[] | select(.baseUrl == $u) | .index' | head -n1); "
+    + "[ -n \"$idx\" ] || { echo 'provider no longer in the daemon list' >&2; exit 1; }; "
+    + "out=$(curl -sS --max-time 8 -X POST -H 'Content-Type: application/json' "
+    + "-d \"{\\\"indices\\\":[$idx]}\" " + baseUrl + "/providers/" + verb + ") || exit 1; "
+    + "printf %s \"$out\" | jq -e '(.output // .) | has(\"message\")' >/dev/null "
+    + "|| { printf %s \"$out\" | jq -r '.error // \"" + verb + " failed\"' >&2; exit 1; }"
+}
+
 // GET /usage?limit=1 -> the routstrd CLI treats the payload as UsageEntry[]
 // but tolerates wrapping; mirror that here.
 function latestUsage(json) {
