@@ -122,7 +122,6 @@ node --test "test/*.test.mjs"
 ## Docs
 
 - [docs/DESIGN.md](docs/DESIGN.md) — product, architecture, scope
-- [docs/DECISIONS.md](docs/DECISIONS.md) — rejected alternatives
 - [manifest.json](manifest.json) — Omarchy plugin contract
 - [test/](test/) — fixtures and tests
 
