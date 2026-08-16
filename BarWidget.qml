@@ -5,10 +5,11 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Bar entry: a lightning glyph plus sats remaining, red under the
-// low-balance threshold, dimmed while the daemon is down. Left click opens
-// the panel; middle/right click refreshes. The panel itself lives in
-// Panel.qml, clock-style.
+// Bar entry: a lightning glyph plus sats remaining, badged on any
+// keep-alive break (low balance, provider drift, empty model list), dimmed
+// while the daemon is down. Left click opens the panel; middle click
+// refreshes; right click stays reserved for the spec's later daemon menu.
+// The panel itself lives in Panel.qml, clock-style.
 BarWidget {
   id: root
   moduleName: "io.github.babdbtc.routstr"
@@ -89,16 +90,14 @@ BarWidget {
 
     function open(): void { root.open() }
     function close(): void { root.close() }
-    function show(): void { root.open() }
-    function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
     function refresh(): void { root.broadcast("refresh") }
     function status(): string { return service.statusText }
     function topup(sats: string): string {
-      var n = parseInt(sats, 10)
-      if (!isFinite(n) || n <= 0) return "usage: topup <sats>"
-      service.createInvoice(n)
-      return "requested a Lightning invoice for " + n + " sats"
+      if (!service.daemonUp) return "routstrd is not answering on 127.0.0.1:8008"
+      var asked = String(sats).trim() === "" ? service.defaultTopupSats : sats
+      var n = service.createInvoice(asked)
+      return n > 0 ? "requested a Lightning invoice for " + n + " sats" : "usage: topup [sats]"
     }
     function wire(): string {
       service.wireOpencode()
@@ -117,8 +116,10 @@ BarWidget {
     tooltipText: service.statusText
 
     onPressed: function(b) {
-      if (b === Qt.MiddleButton || b === Qt.RightButton) root.refresh()
-      else root.togglePanel()
+      // Right click is deliberately unbound — the spec reserves it for a
+      // later start/stop/new-invoice menu.
+      if (b === Qt.MiddleButton) root.refresh()
+      else if (b === Qt.LeftButton) root.togglePanel()
     }
   }
 }

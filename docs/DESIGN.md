@@ -99,7 +99,7 @@ Settings (planned):
 - `lowBalanceSats` (bar goes red / notify)
 - `hideBalance` (default false — bar shows glyph and state only)
 - `autoWireOpencode` (default true)
-- `defaultTopupSats` (2100)
+- `defaultTopupSats` (2100 — the amount IPC `topup` uses when called without one)
 
 Distribution: one public git repo, `manifest.json` + README + LICENSE at root, list on [omarchyplugins.com](https://omarchyplugins.com). `omarchy plugin add` clones files only. It never runs an install hook and never asks for sudo.
 
@@ -156,7 +156,7 @@ Omarchy can install: `pi`, `omp`, `opencode`, `claude`, `codex`, `grok`, `gemini
 | Agent | Auto-wire? | Why |
 | --- | --- | --- |
 | OpenCode | Yes, if installed | Omarchy default. Additive provider. |
-| Pi | Yes, if `~/.pi/agent` exists | Additive. |
+| Pi | Explicit toggle (v2) | Additive; the v2 connect rows replaced auto-wiring for everything but OpenCode. |
 | Claude Code | Offer only, explicit toggle | Overwrites Anthropic env. Copy must say so. |
 | OpenClaw / Hermes | Offer if present | Do not assume. |
 | Grok, Codex, Gemini, Copilot, Crush | Skip | No `routstrd` integration. Faking it breaks them. |
@@ -213,14 +213,14 @@ Primary action for v1: **Connect OpenCode**. Claude is a toggle: “Routes Claud
 
 - Glyph + sats remaining, or a down/error mark.
 - `hideBalance` on: glyph + state only. Sats in the bar leak in a community that screenshots its desktop constantly.
-- Red under `lowBalanceSats`.
-- Left click: panel.
-- Right click (later): start/stop daemon, or new invoice.
+- Alerted (the bar's active/urgent styling) under `lowBalanceSats` — and on any keep-alive break: provider drift, model list empty.
+- Left click: panel. Middle click: refresh.
+- Right click (later): start/stop daemon, or new invoice. Unbound until then.
 
 **Panel**
 
 - Install / start state if the daemon is missing.
-- Top-up chips: 210 / 2100 / 21k sats → Lightning QR from `POST /wallet/receive/bolt11`, plus paste `cashuA…` / `cashuB…` (the private path).
+- Top-up chips: 210 / 2100 / 21k sats, plus a custom-amount field → Lightning QR from `POST /wallet/receive/bolt11`, plus paste `cashuA…` / `cashuB…` (the private path).
 - Mint list with per-mint sats, add-mint, trust caveat; with >1 mint, rows pick where invoices land.
 - Integrations list (above) with explicit Claude / Pi / OpenClaw toggles.
 - Copy-`routstr/<id>` model dropdown; collapsed provider enable/disable list.
@@ -316,7 +316,7 @@ Implementation findings (v1, 2026-08-15):
 - `routstrd start`/`stop` go through `Quickshell.execDetached` — holding them in a `Process` would tie the daemon's lifetime to the widget.
 - All CLI calls run under `bash -lc` so Bun's global bin dir is on PATH inside `omarchy-shell`.
 - Health polling is not gated on the CLI probe: a Docker routstrd answers on loopback with no `routstrd` on PATH. The CLI gates only actions (wire, start, stop).
-- IPC target `routstr`: `open/close/toggle/refresh/status/topup <sats>/wire`.
+- IPC target `routstr`: `open/close/toggle/refresh/status/topup [sats]/wire` — `topup` without an amount uses `defaultTopupSats`.
 - Testable without routstrd: point a mock HTTP server at `127.0.0.1:8008` serving `/health`, `/balance`, `/keys/balance`, `/models`, `/usage`, `POST /wallet/receive/bolt11`.
 
 Implementation findings (v2, 2026-08-16, routstrd 0.3.11):
@@ -329,6 +329,10 @@ Implementation findings (v2, 2026-08-16, routstrd 0.3.11):
 - Deploy loop: copying files into a live plugin dir triggers Quickshell hot reload, which segfaults in `IpcHandler::updateRegistration` (upstream bug, crash dialog per deploy). Kill the shell first: `quickshell kill -p /usr/share/omarchy/shell --any-display`, then cp, then `omarchy-restart-shell`.
 - Keyboard: panels taller than the height cap need `onMoveRequested` to scroll the Flickable; inline TextFields and open dropdown popups must set `PanelKeyCatcher.blocked`.
 - Usage record: `GET /usage/summary` (60s server cache) feeds the `omarchy.agents` record; the agents panel only rescans its directory when its own updater exits, so a brand-new record shows up after the next update cycle or shell restart.
+- Lightning invoice QRs retire after 30 minutes — mint quotes expire, and a stale QR is a dead end.
+- Number labels: group digits with U+00A0, never U+2009. The default bar font (`CaskaydiaCove Nerd Font`, via `fc-match monospace`) has no thin-space glyph, so Qt fell back for that one character and gave the line the fallback's metrics — at 12px, `21 000` measured 7.0px taller than `210`, 5.3px of it *below* the baseline, which floated the digits ~1.8px high inside every vertically centered label (visible the moment two amounts sit side by side). U+00A0 is in the font and measures identically to bare digits (±0.0px height, baseline, descent) for 5.7px more width per separator. Check `fc-list ':charset=<cp>'` before choosing a separator. The top-up chips additionally pin to one hidden reference chip, since differing digit counts still make the labels different widths.
+- Top-up amounts are bounded in `Model.normalizeTopupSats` (1 … 21 000 000 sats): `invoiceSats` and the balance properties are QML ints, and past that a number is a typo. Chips, the custom field, and IPC `topup` all go through it.
+- First-run default model: after `clients add --opencode` succeeds, a missing/empty top-level `model` is set to the `small_model` routstrd just wrote (its own cheap pick from /models) — jq, atomic, and a non-empty `model` is never touched.
 
 Official contract: `shell/README.md` and `shell/plugins/README.md` in the [Omarchy repo](https://github.com/basecamp/omarchy/tree/quattro); the manifest schema’s source of truth is `shell/services/PluginRegistry.qml`. Plus the [develop guide](https://omarchyplugins.com/develop.html) and [first-party plugins](https://github.com/basecamp/omarchy/tree/quattro/shell/plugins). There is no `manual/32-shell-plugins.md` in the shipped 4.0 tree — do not cite it.
 

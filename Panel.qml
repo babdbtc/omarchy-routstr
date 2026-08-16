@@ -46,6 +46,14 @@ Panel {
     return false
   }
 
+  function submitTopup() {
+    if (!root.ready) return
+    // Clears only once an invoice is actually out: a rejected amount stays
+    // put so the error line reads against what was typed.
+    if (root.service.createInvoice(amountField.text) > 0) amountField.text = ""
+    keyCatcher.forceActiveFocus()
+  }
+
   function submitCashu() {
     if (!root.ready) return
     var token = cashuField.text
@@ -105,7 +113,7 @@ Panel {
       anchors.fill: parent
       // While an inline editor owns focus, keys must reach it (the
       // catcher's BeforeItem priority would eat them otherwise).
-      blocked: cashuField.activeFocus || mintField.activeFocus || modelDropdown.popupOpen
+      blocked: cashuField.activeFocus || mintField.activeFocus || amountField.activeFocus || modelDropdown.popupOpen
       onCloseRequested: {
         if (root.confirmOpen) root.confirmCancel()
         else root.close()
@@ -228,8 +236,6 @@ Panel {
               width: parent.width
               title: "Install routstrd"
               command: "bun i -g routstrd"
-              runnable: root.ready && root.service.bunInstalled
-              onRun: root.service.installInTerminal()
             }
 
             Text {
@@ -321,6 +327,26 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            // Reference chip: never shown, only measured. The three labels
+            // carry different digit counts, so they measure differently;
+            // pinning every chip to the widest keeps the row uniform. It is
+            // declared `selected` because Button bolds its label in that
+            // state — a no-op in the monospace default, but it stops a
+            // proportional theme font from resizing a chip the moment its
+            // invoice goes out. The height pin is belt-and-braces: labels
+            // measure the same height now that formatSats groups with a
+            // glyph the font actually has (see Model.formatSats), and this
+            // keeps the row honest if one ever pulls a fallback again.
+            Button {
+              id: chipSizer
+              visible: false
+              text: Model.formatSats(Math.max.apply(Math, root.topupChoices))
+              bordered: true
+              selected: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
             Row {
               spacing: Style.space(8)
 
@@ -329,6 +355,8 @@ Panel {
                 Button {
                   required property int modelData
                   text: Model.formatSats(modelData)
+                  width: Math.max(chipSizer.implicitWidth, implicitWidth)
+                  height: Math.max(chipSizer.implicitHeight, implicitHeight)
                   bordered: true
                   selected: root.ready && root.service.invoiceSats === modelData && root.service.invoiceText !== ""
                   foreground: root.foreground
@@ -344,6 +372,40 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
                 anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            // Anything the chips do not cover. Model bounds the amount; the
+            // mint still decides what it will actually issue.
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: amountField
+                Layout.fillWidth: true
+                placeholderText: "Custom amount (sats)"
+                inputMethodHints: Qt.ImhDigitsOnly
+                foreground: root.foreground
+                font.family: root.fontFamily
+                enabled: root.ready && !root.service.creatingInvoice
+                onAccepted: root.submitTopup()
+                Keys.onEscapePressed: {
+                  text = ""
+                  keyCatcher.forceActiveFocus()
+                }
+              }
+
+              Button {
+                text: root.ready && root.service.creatingInvoice ? "Creating…" : "Get invoice"
+                iconSpinning: root.ready && root.service.creatingInvoice
+                iconText: root.ready && root.service.creatingInvoice ? "󰑓" : ""
+                bordered: true
+                enabled: root.ready && !root.service.creatingInvoice && amountField.text !== ""
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: root.submitTopup()
               }
             }
 
@@ -661,8 +723,7 @@ Panel {
                       if (!root.ready) return ""
                       if (!root.service.opencodeInstalled) return "Not installed"
                       if (root.service.opencodeWired)
-                        return "Connected · " + root.service.opencodeModels + " model"
-                          + (root.service.opencodeModels === 1 ? "" : "s")
+                        return "Connected · " + Model.countLabel(root.service.opencodeModels, "model")
                       if (root.service.driftAlert) return "Provider removed from opencode.json"
                       return "Not connected"
                     }
@@ -714,7 +775,7 @@ Panel {
               title: "Pi"
               subtitle: {
                 if (!root.ready || !root.service.piWired) return "Not connected"
-                return "Connected · " + root.service.piModels + " model" + (root.service.piModels === 1 ? "" : "s")
+                return "Connected · " + Model.countLabel(root.service.piModels, "model")
               }
               wired: root.ready && root.service.piWired
             }
@@ -726,7 +787,7 @@ Panel {
               title: "OpenClaw"
               subtitle: {
                 if (!root.ready || !root.service.openclawWired) return "Not connected"
-                var s = "Connected · " + root.service.openclawModels + " model" + (root.service.openclawModels === 1 ? "" : "s")
+                var s = "Connected · " + Model.countLabel(root.service.openclawModels, "model")
                 if (root.service.openclawDefaultIsRoutstr) s += " · default model set"
                 return s
               }
@@ -823,14 +884,7 @@ Panel {
 
                 Text {
                   Layout.fillWidth: true
-                  text: {
-                    if (!root.ready) return ""
-                    var rows = root.service.providerRows
-                    var off = 0
-                    for (var i = 0; i < rows.length; i++) if (rows[i].disabled) off++
-                    return rows.length + " provider" + (rows.length === 1 ? "" : "s")
-                      + (off > 0 ? " · " + off + " disabled" : "")
-                  }
+                  text: root.ready ? Model.providerSummary(root.service.providerRows) : ""
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
