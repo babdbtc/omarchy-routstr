@@ -114,7 +114,10 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
   readonly property int lowBalanceSats: intSetting("lowBalanceSats", 100, 0, 210000)
-  readonly property bool autoWireOpencode: setting("autoWireOpencode", true) === true
+  // Off by default: the first write to someone else's config is theirs to
+  // authorize, and the panel's Connect button is where they do it. Turning
+  // this on trades that click for "wired the moment the daemon answers".
+  readonly property bool autoWireOpencode: setting("autoWireOpencode", false) === true
   readonly property int defaultTopupSats: intSetting("defaultTopupSats", 2100, 21, 210000)
   readonly property bool hideBalance: setting("hideBalance", false) === true
 
@@ -394,6 +397,8 @@ Item {
 
   // ---- OpenCode wiring -----------------------------------------------------
 
+  // Opt-in (see autoWireOpencode). With the setting off this is a no-op and
+  // opencode.json is only ever touched by a Connect/Repair click.
   function maybeAutoWire() {
     if (!autoWireOpencode || !daemonUp || !opencodeInstalled || !installed) return
     if (opencodeWired) { _sawWired = true; return }

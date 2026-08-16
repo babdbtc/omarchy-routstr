@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "babdbtc",
   "license": "MIT",
-  "description": "Fund Routstr and auto-wire OpenCode so Omarchy agents can buy inference with Lightning or Cashu. No account.",
+  "description": "Fund Routstr and connect OpenCode in one click, so Omarchy agents can buy inference with Lightning or Cashu. No account.",
   "kinds": [
     "bar-widget"
   ],
@@ -22,7 +22,7 @@
       "refreshIntervalSec": 30,
       "lowBalanceSats": 100,
       "hideBalance": false,
-      "autoWireOpencode": true,
+      "autoWireOpencode": false,
       "defaultTopupSats": 2100
     },
     "schema": [
@@ -53,8 +53,8 @@
       {
         "key": "autoWireOpencode",
         "type": "boolean",
-        "label": "Auto-wire OpenCode when the daemon is up",
-        "defaultValue": true
+        "label": "Connect OpenCode automatically (edits opencode.json without asking)",
+        "defaultValue": false
       },
       {
         "key": "defaultTopupSats",

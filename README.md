@@ -2,7 +2,7 @@
 
 An [Omarchy](https://omarchy.org) Quattro bar plugin that funds and wires [Routstr](https://routstr.com) so OpenCode (and other agents) can buy AI inference with Lightning or Cashu. No account, no KYC, no API-key dashboard.
 
-**Status: v2 implemented (2026-08-16, tested against routstrd 0.3.11).** v1 shipped the bar widget, panel, Lightning top-up QR, OpenCode auto-wiring, and low-balance/daemon-down notifications. v2 adds paste-Cashu top-up, the mint list (+ add, + invoice targeting), explicit Claude Code / Pi / OpenClaw toggles with a correct disconnect, provider enable/disable, a copy-model-id dropdown, and a prepaid row in the first-party `omarchy.agents` panel. Not yet listed on omarchyplugins.com. The spec lives in [docs/DESIGN.md](docs/DESIGN.md); scope decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
+**Status: v2 implemented (2026-08-16, tested against routstrd 0.3.11).** v1 shipped the bar widget, panel, Lightning top-up QR, OpenCode wiring, and low-balance/daemon-down notifications. v2 adds paste-Cashu top-up, the mint list (+ add, + invoice targeting), explicit Claude Code / Pi / OpenClaw toggles with a correct disconnect, provider enable/disable, a copy-model-id dropdown, and a prepaid row in the first-party `omarchy.agents` panel. Not yet listed on omarchyplugins.com. The spec lives in [docs/DESIGN.md](docs/DESIGN.md); scope decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## What it is
 
@@ -10,7 +10,7 @@ A Tailscale-shaped front-end for the existing [`routstrd`](https://github.com/Ro
 
 - Bar: sats remaining, daemon up/down.
 - Panel: top up with a Lightning QR (preset chips or a custom amount) or paste a `cashuA…` token, see and add mints, connect agents, toggle providers, copy model ids.
-- Auto-integration: detect OpenCode (Omarchy’s default agent) and run `routstrd clients add --opencode` so models appear without editing `opencode.json` by hand. Claude Code, Pi, and OpenClaw are explicit toggles — Claude's is a takeover of its Anthropic login and says so before doing anything.
+- Integration: one click runs `routstrd clients add --opencode`, so models appear without editing `opencode.json` by hand. Claude Code, Pi, and OpenClaw are explicit toggles too — Claude's is a takeover of its Anthropic login and says so before doing anything. Nothing under `~/.config` is written until you press Connect; the `autoWireOpencode` setting opts into doing it unattended.
 - A prepaid Routstr row in the first-party `omarchy.agents` panel (balance, spend, request history).
 
 The plugin does **not** hold the Cashu mnemonic, does **not** proxy inference through `omarchy-shell`, and does **not** implement a chat UI. Spend stays in `routstrd` on `127.0.0.1:8008`. Agents talk to that local OpenAI-compatible endpoint.

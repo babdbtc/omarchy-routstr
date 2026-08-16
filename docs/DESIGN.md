@@ -98,7 +98,7 @@ Settings (planned):
 - `refreshIntervalSec` (default 30)
 - `lowBalanceSats` (bar goes red / notify)
 - `hideBalance` (default false — bar shows glyph and state only)
-- `autoWireOpencode` (default true)
+- `autoWireOpencode` (default **false** — Connect is a click; see DECISIONS, "Auto-wire OpenCode on first run")
 - `defaultTopupSats` (2100 — the amount IPC `topup` uses when called without one)
 
 Distribution: one public git repo, `manifest.json` + README + LICENSE at root, list on [omarchyplugins.com](https://omarchyplugins.com). `omarchy plugin add` clones files only. It never runs an install hook and never asks for sudo.
@@ -155,7 +155,7 @@ Omarchy can install: `pi`, `omp`, `opencode`, `claude`, `codex`, `grok`, `gemini
 
 | Agent | Auto-wire? | Why |
 | --- | --- | --- |
-| OpenCode | Yes, if installed | Omarchy default. Additive provider. |
+| OpenCode | One click, opt-in auto | Omarchy default, additive provider — but still the user's file. Connect is the consent; `autoWireOpencode` opts into doing it unattended. |
 | Pi | Explicit toggle (v2) | Additive; the v2 connect rows replaced auto-wiring for everything but OpenCode. |
 | Claude Code | Offer only, explicit toggle | Overwrites Anthropic env. Copy must say so. |
 | OpenClaw / Hermes | Offer if present | Do not assume. |
@@ -178,13 +178,16 @@ plugin enabled
   → daemon down?        `routstrd start`. offer “start on boot” in a terminal:
                         `routstrd service install`, then `pm2 startup` + `pm2 save`
                         (startup emits a sudo command — the user runs it, never the plugin)
-  → balance 0?          Lightning QR (`routstrd receive N`). still wire the provider
-  → OpenCode present?   `routstrd clients add --opencode`
+  → balance 0?          Lightning QR (`routstrd receive N`). still offer the provider
+  → OpenCode present?   show Connect. on click (or with autoWireOpencode on):
+                        `routstrd clients add --opencode`
   → no default model?   set `model` to a cheap coding id from /models
   → notify              “OpenCode has N Routstr models.”
 ```
 
-Wire before fund. An unfunded but wired agent fails as “top up,” not “no provider configured.”
+Offer wiring before fund. An unfunded but wired agent fails as “top up,” not “no provider configured.”
+
+Nothing under `~/.config` is written until the user clicks Connect. The plugin appearing in the bar is not consent to edit another program’s config.
 
 ### Keep-alive
 
@@ -279,7 +282,7 @@ Hard rules:
 1. Detect `routstrd` / talk to `:8008`.
 2. Bar: balance + daemon state.
 3. Lightning top-up QR.
-4. Auto-wire OpenCode (`clients add --opencode`) + Repair if the provider block disappears.
+4. Connect OpenCode (`clients add --opencode`) + Repair if the provider block disappears.
 5. Low-balance notification.
 
 Ship that. Use it for a week.
