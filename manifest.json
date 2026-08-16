@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.babdbtc.routstr",
   "name": "Routstr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "babdbtc",
   "license": "MIT",
   "description": "Fund Routstr and auto-wire OpenCode so Omarchy agents can buy inference with Lightning or Cashu. No account.",
