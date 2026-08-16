@@ -19,16 +19,32 @@ function unwrap(obj) {
   return obj
 }
 
-// "21000" -> "21 000" (thin spaces). Negative/unknown -> em dash.
+// "21000" -> "21 000". Negative/unknown -> em dash.
+//
+// The group separator is U+00A0 (no-break space), not the typographically
+// nicer U+2009 (thin space). The bar's default monospace (CaskaydiaCove
+// Nerd Font, via `fc-match monospace`) carries no U+2009 glyph, so Qt fell
+// back to another font for that one character and handed the whole line
+// that font's metrics: measured at 12px, "21 000" came out 7.0px taller
+// than "210" with 5.3px of the growth below the baseline, which floated the
+// digits ~1.8px high inside any vertically centered label. U+00A0 is in the
+// font and measures identically to bare digits. Any replacement separator
+// must be inside the font's coverage — check `fc-list ':charset=<cp>'`.
 function formatSats(n) {
   if (n === undefined || n === null || !isFinite(n) || n < 0) return "—"
   var s = String(Math.floor(n))
   var out = ""
   for (var i = 0; i < s.length; i++) {
-    if (i > 0 && (s.length - i) % 3 === 0) out += "\u2009"
+    if (i > 0 && (s.length - i) % 3 === 0) out += "\u00a0"
     out += s.charAt(i)
   }
   return out
+}
+
+// "3 models", "1 model" — count + pluralized noun, shared by every label
+// that counts something.
+function countLabel(n, noun) {
+  return n + " " + noun + (n === 1 ? "" : "s")
 }
 
 // GET /balance -> { balances: { "<mintUrl>": sats } }. Returns total sats or
@@ -157,22 +173,56 @@ function providerRows(json) {
   return rows
 }
 
+// PROVIDERS header line: "3 providers · 1 disabled".
+function providerSummary(rows) {
+  var list = rows instanceof Array ? rows : []
+  var off = 0
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].disabled) off++
+  }
+  var s = countLabel(list.length, "provider")
+  if (off > 0) s += " · " + off + " disabled"
+  return s
+}
+
+// POSIX single-quote escaping, the same rule as Commons/Util.shellQuote.
+// Duplicated deliberately: this file is a `.pragma library`, so it cannot
+// import the QML singleton, and every script below has to quote its inputs
+// (mint URLs and Nostr-supplied provider URLs are attacker-influenced).
+// One copy here rather than one per call site.
+function shellQuote(value) {
+  return "'" + String(value === undefined || value === null ? "" : value).replace(/'/g, "'\\''") + "'"
+}
+
+// Every config-editing and provider script below is jq-driven. Check for it
+// up front so a missing jq reports itself, instead of surfacing as whatever
+// the next command happens to say when its input is empty.
+function requireJqFragment() {
+  return "command -v jq >/dev/null 2>&1 "
+    + "|| { echo 'jq is required for this action but is not installed' >&2; exit 1; }; "
+}
+
 // Enable/disable one provider. The daemon's toggle endpoints take indices
 // into its *current* provider list, and a Nostr refresh replaces that list
 // wholesale — a remembered index can silently hit the wrong provider. So
 // the script re-reads /providers and resolves the URL to an index in the
 // same breath as the POST. Pure function of its inputs, tested as-is.
 function providerToggleScript(url, disable, baseUrl) {
-  var quotedUrl = "'" + String(url).replace(/'/g, "'\\''") + "'"
+  var quotedUrl = shellQuote(url)
   var verb = disable ? "disable" : "enable"
-  return "list=$(curl -sS --max-time 8 " + baseUrl + "/providers) || exit 1; "
+  // -f on the list fetch: without it an HTTP 500 body reaches jq, yields no
+  // index, and the failure reads as "provider no longer in the daemon list"
+  // — blaming discovery for a daemon error.
+  return requireJqFragment()
+    + "list=$(curl -fsS --max-time 8 " + baseUrl + "/providers) "
+    + "|| { echo 'could not read the provider list from routstrd' >&2; exit 1; }; "
     + "idx=$(printf %s \"$list\" | jq -r --arg u " + quotedUrl + " "
     + "'(.output // .) | .providers[] | select(.baseUrl == $u) | .index' | head -n1); "
     + "[ -n \"$idx\" ] || { echo 'provider no longer in the daemon list' >&2; exit 1; }; "
     + "out=$(curl -sS --max-time 8 -X POST -H 'Content-Type: application/json' "
     + "-d \"{\\\"indices\\\":[$idx]}\" " + baseUrl + "/providers/" + verb + ") || exit 1; "
-    + "printf %s \"$out\" | jq -e '(.output // .) | has(\"message\")' >/dev/null "
-    + "|| { printf %s \"$out\" | jq -r '.error // \"" + verb + " failed\"' >&2; exit 1; }"
+    + "printf %s \"$out\" | jq -e '(.output // .) | has(\"message\")' >/dev/null 2>&1 "
+    + "|| { printf %s \"$out\" | jq -r '.error // \"" + verb + " failed\"' 2>/dev/null >&2; exit 1; }"
 }
 
 // GET /usage?limit=1 -> the routstrd CLI treats the payload as UsageEntry[]
@@ -199,6 +249,65 @@ function latestUsage(json) {
   }
 }
 
+// Shared shell fragments for the config-editing scripts. Both expect $cfg
+// to hold the config path.
+
+// One .bak-routstr-<ts> beside $cfg before the plugin's first write to it;
+// a no-op when any backup already exists (connect and disconnect both call
+// this, whichever runs first wins).
+function backupOnceFragment() {
+  return "set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; "
+}
+
+// jq-edit $cfg in place, atomically: a sibling mktemp keeps the mv on the
+// same filesystem, and a failed jq leaves the config untouched. mktemp makes
+// 0600, and the mv carries that mode onto the config, so the original mode
+// is copied across first — the plugin should not silently re-permission a
+// file it only edited one key in.
+function atomicJqEditFragment(jqProgram) {
+  return "tmp=$(mktemp \"$cfg.XXXXXX\") || exit 1; "
+    + "chmod --reference=\"$cfg\" \"$tmp\" 2>/dev/null; "
+    + "if jq '" + jqProgram + "' \"$cfg\" > \"$tmp\"; then mv \"$tmp\" \"$cfg\"; else rm -f \"$tmp\"; exit 1; fi"
+}
+
+// Cross-instance mutex around a script that writes a shared file.
+//
+// One bar surface exists per monitor, so every Service instance reaches the
+// same conclusion at the same moment — and auto-wire then runs N concurrent
+// `routstrd clients add --opencode`, each a read-modify-write of the same
+// opencode.json. mkdir is atomic on every POSIX filesystem: exactly one
+// caller creates the directory, the rest exit 75 (EX_TEMPFAIL) having
+// touched nothing, and pick the result up through the config watcher.
+//
+// The trap releases the lock on normal exit and on SIGTERM/SIGINT (a
+// watchdog reap included). A SIGKILL would strand it, which is why it lives
+// in $XDG_RUNTIME_DIR: worst case it clears at logout.
+function singleFlightFragment(lockDir) {
+  return "lock=" + shellQuote(lockDir) + "; mkdir \"$lock\" 2>/dev/null || exit 75; "
+    + "trap 'rmdir \"$lock\" 2>/dev/null' EXIT INT TERM; "
+}
+
+// Exit code singleFlightFragment uses for "another instance holds the lock".
+// A function rather than a bare top-level var: every other symbol QML reads
+// out of this file is one, and a name that resolved to undefined would fail
+// silently — the losing instances would report "clients add failed" instead
+// of backing off quietly.
+function exTempfail() { return 75 }
+
+// First-run default model (DESIGN.md: "no default model? → set `model` to a
+// cheap coding id from /models"). routstrd has no default-model surface,
+// but `clients add --opencode` writes `small_model` — its own cheap pick
+// from /models. Copy that into a missing/empty top-level `model` right
+// after a successful add. `model`/`small_model` are OpenCode schema keys,
+// not routstrd's drifting provider format, and a non-empty `model` is never
+// overwritten (hard rule). Expects $cfg; runs only after clients add
+// succeeded, so exit 0 is "nothing to do".
+function opencodeDefaultModelFragment() {
+  return "[ -f \"$cfg\" ] || exit 0; "
+    + "jq -e '((.model // \"\") == \"\") and ((.small_model // \"\") | startswith(\"routstr/\"))' \"$cfg\" >/dev/null || exit 0; "
+    + atomicJqEditFragment(".model = .small_model")
+}
+
 // Disconnect script for one explicit client. `routstrd clients delete` only
 // removes the daemon-side record; the integration file keeps pointing at a
 // revoked key, which for Claude Code means a broken agent that still
@@ -209,10 +318,16 @@ function latestUsage(json) {
 // must count as success, and the CLI collapses it into a generic failure.
 // Pure function of its inputs so tests can execute the exact same script.
 function disconnectScript(id, configPath, baseUrl) {
-  var quotedPath = "'" + String(configPath).replace(/'/g, "'\\''") + "'"
+  var quotedPath = shellQuote(configPath)
   var script =
-    "code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST"
-    + " -H 'Content-Type: application/json' -d '{\"id\":\"" + id + "\"}' "
+    // jq is checked before the daemon delete, not after. Deleting the client
+    // record and then failing to clean the file leaves the config pointing at
+    // a revoked key — for Claude Code, an agent that is broken *and* still
+    // bypassing the Anthropic login, which DECISIONS.md calls strictly worse
+    // than either connected or disconnected. Fail before touching anything.
+    requireJqFragment()
+    + "code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST"
+    + " -H 'Content-Type: application/json' -d " + shellQuote(JSON.stringify({ id: String(id) })) + " "
     + baseUrl + "/clients/delete); "
     + "case \"$code\" in 200|404) ;; *) echo \"daemon refused the delete (HTTP $code)\" >&2; exit 1;; esac; "
     + "cfg=" + quotedPath + "; [ -f \"$cfg\" ] || exit 0; "
@@ -222,8 +337,17 @@ function disconnectScript(id, configPath, baseUrl) {
     // deriving a guard regex from baseUrl would drop the localhost
     // spelling and turn a safety check into string plumbing. If the
     // daemon address ever becomes configurable, change both together.
+    //
+    // The exit status has to be read precisely. `jq -e` answers 1 for "the
+    // result was false or null" (a foreign Anthropic config — leave it
+    // alone, exit 0) and 4 for "no output at all" (an empty file — nothing
+    // to strip). Everything else is jq failing to read the file, which must
+    // NOT be mistaken for "not ours": a bare `|| exit 0` reports a clean
+    // disconnect while the hijack is still in place.
     script +=
-      "jq -e '(.env.ANTHROPIC_BASE_URL // \"\") | test(\"^https?://(127\\\\.0\\\\.0\\\\.1|localhost):8008/?$\")' \"$cfg\" >/dev/null || exit 0; "
+      "jq -e '(.env.ANTHROPIC_BASE_URL // \"\") | test(\"^https?://(127\\\\.0\\\\.0\\\\.1|localhost):8008/?$\")' \"$cfg\" >/dev/null; "
+      + "ours=$?; case $ours in 0) ;; 1|4) exit 0;; "
+      + "*) echo 'could not read the Claude settings file — left it untouched' >&2; exit 1;; esac; "
     jqProgram =
       "del(.env.ANTHROPIC_AUTH_TOKEN, .env.ANTHROPIC_BASE_URL, .env.ANTHROPIC_DEFAULT_OPUS_MODEL,"
       + " .env.ANTHROPIC_DEFAULT_SONNET_MODEL, .env.ANTHROPIC_DEFAULT_HAIKU_MODEL)"
@@ -238,10 +362,7 @@ function disconnectScript(id, configPath, baseUrl) {
   // Backup before the edit if none exists yet: connect makes one, but a
   // user who wired via the CLI arrives here with no .bak, and this must
   // not be the plugin's first un-backed-up write to their config.
-  script +=
-    "set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; "
-    + "tmp=$(mktemp \"$cfg.XXXXXX\") || exit 1; "
-    + "if jq '" + jqProgram + "' \"$cfg\" > \"$tmp\"; then mv \"$tmp\" \"$cfg\"; else rm -f \"$tmp\"; exit 1; fi"
+  script += backupOnceFragment() + atomicJqEditFragment(jqProgram)
   return script
 }
 
@@ -324,6 +445,31 @@ function cashuResult(json) {
   var amount = Number(obj.amount)
   var sats = obj.unit === "msat" ? Math.floor(amount / 1000) : amount
   return { ok: true, amountSats: isFinite(sats) && sats > 0 ? sats : 0, error: "" }
+}
+
+// The most one invoice may ask for. `invoiceSats` and the balance
+// properties are QML ints (32-bit), and 21M sats is already far past what
+// an inference wallet burns — beyond this a number is a typo, not an
+// intent. The mint still has the final say on what it will actually issue.
+var MAX_TOPUP_SATS = 21000000
+
+// A typed top-up amount -> whole sats, or 0 when the input is not usable.
+// Accepts the grouping this UI renders itself (and the thin space it used
+// to render, so older copied values still work) plus the
+// separators people paste (space, comma, underscore), so an amount copied
+// off the panel round-trips.
+function normalizeTopupSats(raw) {
+  var s = String(raw === undefined || raw === null ? "" : raw).trim()
+  s = s.replace(/[\u2009\u00a0\s,_]/g, "")
+  if (!/^\+?\d+$/.test(s)) return 0
+  var n = parseInt(s, 10)
+  if (!isFinite(n) || n <= 0 || n > MAX_TOPUP_SATS) return 0
+  return n
+}
+
+// Why normalizeTopupSats returned 0, for the panel's error line.
+function topupError() {
+  return "Top-ups are whole sats, from 1 to " + formatSats(MAX_TOPUP_SATS) + "."
 }
 
 // POST /wallet/receive/bolt11 -> { invoice, amount, mintUrl }
@@ -448,7 +594,7 @@ function statusLabel(probed, installed, onboarded, daemonUp, models) {
   // The daemon answering on loopback beats whatever the CLI probe thinks —
   // a Docker routstrd is up without `routstrd` ever being on PATH.
   if (daemonUp) {
-    if (models >= 0) return "Daemon running · " + models + " model" + (models === 1 ? "" : "s")
+    if (models >= 0) return "Daemon running · " + countLabel(models, "model")
     return "Daemon running"
   }
   if (!probed) return "Checking…"

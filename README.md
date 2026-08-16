@@ -21,7 +21,7 @@ The plugin does **not** hold the Cashu mnemonic, does **not** proxy inference th
 omarchy plugin add https://github.com/babdbtc/omarchy-routstr.git --enable
 ```
 
-Requires Omarchy Quattro, [Bun](https://bun.sh), and `routstrd`. `omarchy plugin add` never runs install hooks; the panel walks through daemon install/start/fund. Wallet onboarding (`routstrd onboard`) runs in a spawned terminal because it prints the mnemonic — that output never passes through `omarchy-shell`.
+Requires Omarchy Quattro, [Bun](https://bun.sh), and `routstrd`. It also shells out to `curl`, `jq`, `qrencode`, and `wl-copy` — all Omarchy base packages, so this only bites on a stripped system; the panel names whichever one is missing rather than failing sideways. `omarchy plugin add` never runs install hooks; the panel walks through daemon install/start/fund. Wallet onboarding (`routstrd onboard`) runs in a spawned terminal because it prints the mnemonic — that output never passes through `omarchy-shell`.
 
 ## Plugin id and IPC
 
@@ -34,6 +34,18 @@ omarchy-shell routstr topup 2100  # Lightning invoice + QR in the panel
 omarchy-shell routstr wire        # routstrd clients add --opencode
 ```
 
+## Tests
+
+```sh
+node --test "test/*.test.mjs"
+```
+
+`Model.js` is a QML `.pragma library` of pure functions, including the text of
+every shell script the plugin runs. The suite strips that one non-JS line and
+executes those exact bytes against fixture agent configs and a stub daemon —
+so a disconnect that silently fails to clean `~/.claude/settings.json` is a
+test failure, not a support ticket.
+
 ## Docs
 
 | File | What it is |
@@ -41,6 +53,7 @@ omarchy-shell routstr wire        # routstrd clients add --opencode
 | [docs/DESIGN.md](docs/DESIGN.md) | Product, architecture, v1/v2 scope, auto-integration |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Alternatives we rejected and why |
 | [manifest.json](manifest.json) | Quattro plugin contract |
+| [test/](test/) | The shell scripts, executed against fixtures |
 
 ## License
 
