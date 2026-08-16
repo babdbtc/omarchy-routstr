@@ -9,7 +9,7 @@ An [Omarchy](https://omarchy.org) Quattro bar plugin that funds and wires [Routs
 A Tailscale-shaped front-end for the existing [`routstrd`](https://github.com/Routstr/routstrd) daemon.
 
 - Bar: sats remaining, daemon up/down.
-- Panel: top up with a Lightning QR or paste a `cashuA…` token, see and add mints, connect agents, toggle providers, copy model ids.
+- Panel: top up with a Lightning QR (preset chips or a custom amount) or paste a `cashuA…` token, see and add mints, connect agents, toggle providers, copy model ids.
 - Auto-integration: detect OpenCode (Omarchy’s default agent) and run `routstrd clients add --opencode` so models appear without editing `opencode.json` by hand. Claude Code, Pi, and OpenClaw are explicit toggles — Claude's is a takeover of its Anthropic login and says so before doing anything.
 - A prepaid Routstr row in the first-party `omarchy.agents` panel (balance, spend, request history).
 
@@ -40,7 +40,7 @@ omarchy-shell routstr wire        # routstrd clients add --opencode
 | --- | --- |
 | [docs/DESIGN.md](docs/DESIGN.md) | Product, architecture, v1/v2 scope, auto-integration |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Alternatives we rejected and why |
-| [manifest.json](manifest.json) | Quattro plugin contract (not loadable until QML exists) |
+| [manifest.json](manifest.json) | Quattro plugin contract |
 
 ## License
 
