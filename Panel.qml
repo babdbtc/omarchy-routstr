@@ -23,6 +23,24 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
+
+  // Success green, ours rather than the theme's. No theme-derived value can
+  // supply this. `Color` exposes no green role at all, and the underlying
+  // palettes disagree on what green even is: the 22 shipped themes use a
+  // named `green` key that is genuinely green in 13 of them and purple,
+  // amber or grey in the rest, while user themes here use the ANSI `color2`
+  // slot instead — rose-pine-moon has no `green` key and its color2 is
+  // #3e8fb0, the same teal as its accent. Six themes define neither.
+  //
+  // Two variants, chosen by the surface actually behind the text. A mint that
+  // reads at 11.9:1 on rose-pine-moon's #191724 drops to 1.31:1 on
+  // catppuccin-latte's #eff1f5, so one value would leave light themes
+  // unreadable. #2d6a30 rather than a lighter green because the light variant
+  // is 10px caption text, so 4.5:1 is the bar it has to clear, not 3:1 —
+  // #2e7d32 cleared it by 0.03 and the next slightly-darker light background
+  // would have failed.
+  readonly property bool darkBackground: Color.popups.background.hslLightness < 0.5
+  readonly property color readyColor: darkBackground ? "#a6e3a1" : "#2d6a30"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property bool ready: service !== null
@@ -71,6 +89,58 @@ Panel {
   }
 
   property bool providersExpanded: false
+
+  // ---- Agent readiness. Two daemon-wide facts (sats, the daemon's model
+  // list) plus one per-row fact (how many models this agent's own config
+  // lists, -1 when the row does not track one). Every row funnels through
+  // agentState so the label, the glyph and the colour cannot disagree.
+  //
+  // These read service properties inside the function body rather than taking
+  // them as arguments. That is safe: QML's binding dependency capture is
+  // scoped to the whole evaluation, not to the calling frame, so property
+  // reads inside a called function are captured too — the same mechanism
+  // Commons/Color.qml relies on for its pick()/composed() surface bindings.
+  // It stays safe only while every input is a QML property with a NOTIFY
+  // signal; a plain JS global or an in-place mutation would silently go stale.
+  function agentState(agentModels) {
+    if (!root.ready) return "unknown"
+    return Model.agentState(root.service.balanceSats, root.service.modelCount, agentModels)
+  }
+
+  // Green for ready, urgent for a named blocker, dim while unknown — on the
+  // label as well as the mark, since the label is what is actually read. The
+  // glyph changes shape too, so the state still lands without colour.
+  function agentMark(state) {
+    return state === "no-models" || state === "no-agent-models" || state === "no-funds" ? "󰀦" : "󰄬"
+  }
+
+  function agentStateColor(state) {
+    if (state === "ready") return root.readyColor
+    if (state === "unknown") return root.dim
+    return root.urgent
+  }
+
+  // Only a wired row makes a claim worth colouring; an unwired one is just
+  // describing itself, so it stays dim.
+  function agentTextColor(wired, state) {
+    return wired ? root.agentStateColor(state) : root.dim
+  }
+
+  function agentStateLabel(detail, note, state) {
+    if (!root.ready) return ""
+    return Model.agentReadyLabel(detail, note, state)
+  }
+
+  // OpenCode's row is hand-rolled rather than an AgentRow, so its derived
+  // state lives here. `opencodeLive` folds in the PATH probe deliberately: a
+  // provider block left behind by an uninstalled binary is not a working
+  // integration, and driftAlert cannot cover the case because it requires
+  // opencodeInstalled itself. Without this the row paints "Not installed" in
+  // ready-green with a tick beside it.
+  readonly property bool opencodeLive:
+    ready && service.opencodeInstalled && service.opencodeWired
+  readonly property string opencodeRowState:
+    ready ? agentState(service.opencodeModels) : "unknown"
 
   // ---- Connect confirmation. Claude Code replaces the Anthropic login;
   // OpenClaw gets its default model overwritten. Neither happens on a
@@ -723,11 +793,17 @@ Panel {
                       if (!root.ready) return ""
                       if (!root.service.opencodeInstalled) return "Not installed"
                       if (root.service.opencodeWired)
-                        return "Connected · " + Model.countLabel(root.service.opencodeModels, "model")
+                        return root.agentStateLabel(Model.countLabel(root.service.opencodeModels, "model"),
+                                                    "", root.opencodeRowState)
                       if (root.service.driftAlert) return "Provider removed from opencode.json"
                       return "Not connected"
                     }
-                    color: root.ready && root.service.driftAlert ? root.urgent : root.dim
+                    // Drift is mutually exclusive with wired (driftAlert is
+                    // _sawWired && !opencodeWired), so it can take the urgent
+                    // branch outright before readiness is consulted.
+                    color: !root.ready ? root.dim
+                      : root.service.driftAlert ? root.urgent
+                      : root.agentTextColor(root.opencodeLive, root.opencodeRowState)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
@@ -735,9 +811,9 @@ Panel {
                 }
 
                 Text {
-                  visible: root.ready && root.service.opencodeWired
-                  text: "󰄬"
-                  color: root.dim
+                  visible: root.opencodeLive
+                  text: root.agentMark(root.opencodeRowState)
+                  color: root.agentStateColor(root.opencodeRowState)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.icon
                   Layout.alignment: Qt.AlignVCenter
@@ -757,39 +833,48 @@ Panel {
               }
             }
 
+            // agentModels stays -1: Claude takes its three models positionally
+            // from /models, so there is no per-agent map to count. The bypass
+            // goes in as a `note`, not a `detail`, so a blocker cannot displace
+            // it — this is the only row whose trailing text is a warning.
             AgentRow {
+              id: claudeRow
               visible: root.ready && root.service.claudeInstalled
               width: parent.width
               clientId: "claude-code"
               title: "Claude Code"
               subtitle: root.ready && root.service.claudeWired
-                ? "Routing through Routstr — Anthropic login bypassed"
+                ? root.agentStateLabel("", "Anthropic login bypassed", claudeRow.rowState)
                 : "Using its own Anthropic login"
               wired: root.ready && root.service.claudeWired
             }
 
             AgentRow {
+              id: piRow
               visible: root.ready && root.service.piInstalled
               width: parent.width
               clientId: "pi-agent"
               title: "Pi"
+              agentModels: root.ready ? root.service.piModels : -1
               subtitle: {
                 if (!root.ready || !root.service.piWired) return "Not connected"
-                return "Connected · " + Model.countLabel(root.service.piModels, "model")
+                return root.agentStateLabel(Model.countLabel(root.service.piModels, "model"), "", piRow.rowState)
               }
               wired: root.ready && root.service.piWired
             }
 
             AgentRow {
+              id: openclawRow
               visible: root.ready && root.service.openclawInstalled
               width: parent.width
               clientId: "openclaw"
               title: "OpenClaw"
+              agentModels: root.ready ? root.service.openclawModels : -1
               subtitle: {
                 if (!root.ready || !root.service.openclawWired) return "Not connected"
-                var s = "Connected · " + Model.countLabel(root.service.openclawModels, "model")
-                if (root.service.openclawDefaultIsRoutstr) s += " · default model set"
-                return s
+                var detail = Model.countLabel(root.service.openclawModels, "model")
+                if (root.service.openclawDefaultIsRoutstr) detail += " · default model set"
+                return root.agentStateLabel(detail, "", openclawRow.rowState)
               }
               wired: root.ready && root.service.openclawWired
             }
@@ -820,6 +905,19 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            // Above the control, not below it, unlike every other caption in
+            // this panel. Its job is to stop a connected user reading the
+            // dropdown as a remaining setup step, and a note underneath is
+            // read too late to do that.
+            Text {
+              width: parent.width
+              text: "Optional — connected agents already carry the whole list. This copies a routstr/<id> reference for a config you are editing yourself."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
             SearchableDropdown {
               id: modelDropdown
               width: parent.width
@@ -833,15 +931,6 @@ Panel {
                 root.service.copyModelRef(v)
                 value = ""
               }
-            }
-
-            Text {
-              width: parent.width
-              text: "Agent configs reference models as routstr/<id>. Picking one copies that."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
             }
           }
 
@@ -945,7 +1034,7 @@ Panel {
             Text {
               visible: root.providersExpanded
               width: parent.width
-              text: "Requests route around disabled providers. Discovery may renumber or re-add providers over time."
+              text: "Optional — routing picks a provider on its own. Disabling one makes requests route around it; discovery may renumber or re-add providers over time."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1022,7 +1111,11 @@ Panel {
     property string title: ""
     property string subtitle: ""
     property bool wired: false
+    // Models listed in this agent's own config. -1 when the row does not
+    // track a count, which keeps it out of the readiness gate.
+    property int agentModels: -1
     readonly property bool rowBusy: root.ready && root.service.clientBusyId === clientId
+    readonly property string rowState: root.agentState(agentModels)
 
     foreground: root.foreground
     implicitHeight: agentRowInner.implicitHeight + Style.spacing.rowPaddingX
@@ -1052,11 +1145,23 @@ Panel {
         Text {
           Layout.fillWidth: true
           text: agentRow.subtitle
-          color: root.dim
+          color: root.agentTextColor(agentRow.wired, agentRow.rowState)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
         }
+      }
+
+      // Same mark the OpenCode row carries, so a glance down the section
+      // reads uniformly instead of leaving three rows to be inferred from
+      // the button saying "Disconnect".
+      Text {
+        visible: agentRow.wired
+        text: root.agentMark(agentRow.rowState)
+        color: root.agentStateColor(agentRow.rowState)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
       }
 
       Button {

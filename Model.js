@@ -590,6 +590,78 @@ function elideMiddle(text, max) {
   return s.substring(0, keep) + "…" + s.substring(s.length - keep)
 }
 
+// What state is a *wired* agent row actually in? Wiring is not the finish
+// line: a perfectly connected agent still fails with an empty wallet, an
+// empty daemon model list, or an empty model map in its own config.
+//
+// Returns one of "ready" | "unknown" | "no-models" | "no-agent-models" |
+// "no-funds".
+//
+// `agentModels` is the count in this agent's *own* config, or -1 when the row
+// does not track one (Claude Code takes its three models positionally, so
+// there is no per-agent map to count). Without it, a config whose provider
+// block carries no `models` key — opencodeState returns wired:true,models:0
+// for exactly that — produces the self-contradicting "Ready to use · 0
+// models", which is the failure this whole label exists to prevent.
+//
+// "unknown" is deliberately not folded into either side. -1 means "not polled
+// yet", and while noModelsAlert may treat an unknown as *not a failure*
+// before it badges the bar, the reverse does not follow: "ready" is a
+// positive claim painted green, and a positive claim needs positive evidence.
+// Service resets both counts to -1 whenever the daemon drops, and the AGENTS
+// section renders as soon as daemonUp flips — one round-trip before the
+// balance lands — so treating -1 as ready would flash a green all-clear over
+// an empty wallet on every daemon start. Service.qml's own wired notification
+// already gates on `balanceSats > 0` for the same reason.
+function agentState(balanceSats, daemonModels, agentModels) {
+  if (balanceSats < 0 || daemonModels < 0) return "unknown"
+  if (daemonModels === 0) return "no-models"
+  if (agentModels === 0) return "no-agent-models"
+  if (balanceSats === 0) return "no-funds"
+  return "ready"
+}
+
+function agentUsable(state) {
+  return state === "ready"
+}
+
+// The subtitle for a wired agent row. "Connected" answers the question the
+// plugin cares about; the user is asking a different one — "can I go and use
+// it now, or is there another step?" — and the MODELS and PROVIDERS sections
+// below look enough like setup to make that ambiguity expensive.
+//
+// Two kinds of trailing text, and they rank differently:
+//
+// `detail` describes the current config — a model count. It is descriptive,
+// re-derivable by looking, and yields to a named blocker, because when
+// something is wrong the blocker is the better use of one elided line.
+//
+// `note` is a standing warning about what wiring *did to the user's machine*:
+// Claude Code's bypassed Anthropic login, the side effect its confirm dialog
+// exists for. That outranks both, and it outranks the blocker specifically
+// because a blocker is recoverable and stateless while the side effect
+// persists until Disconnect. It is also the answer to "why is this agent
+// behaving strangely", a question asked precisely when something else is
+// wrong too — so it must survive the blocked state, and it leads there so
+// ElideRight cannot eat it.
+function agentReadyLabel(detail, note, state) {
+  var blocker = state === "no-models" ? "no models available"
+    : state === "no-agent-models" ? "no models in its config"
+    : state === "no-funds" ? "top up to use it"
+    : ""
+
+  var parts = []
+  if (blocker) {
+    parts.push(note ? note : "Connected")
+    parts.push(blocker)
+  } else {
+    parts.push(state === "ready" ? "Ready to use" : "Connected")
+    if (detail) parts.push(detail)
+    if (note) parts.push(note)
+  }
+  return parts.join(" · ")
+}
+
 function statusLabel(probed, installed, onboarded, daemonUp, models) {
   // The daemon answering on loopback beats whatever the CLI probe thinks —
   // a Docker routstrd is up without `routstrd` ever being on PATH.

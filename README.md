@@ -53,7 +53,7 @@ test failure, not a support ticket.
 | [docs/DESIGN.md](docs/DESIGN.md) | Product, architecture, v1/v2 scope, auto-integration |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Alternatives we rejected and why |
 | [manifest.json](manifest.json) | Quattro plugin contract |
-| [test/](test/) | The shell scripts, executed against fixtures |
+| [test/](test/) | The shell scripts, executed against fixtures, plus the pure label logic |
 
 ## License
 
