@@ -98,7 +98,7 @@ Settings (planned):
 - `refreshIntervalSec` (default 30)
 - `lowBalanceSats` (bar goes red / notify)
 - `hideBalance` (default false — bar shows glyph and state only)
-- `autoWireOpencode` (default **false** — Connect is a click; see DECISIONS, "Auto-wire OpenCode on first run")
+- `autoWireOpencode` (default **false** — Connect is a click)
 - `defaultTopupSats` (2100 — the amount IPC `topup` uses when called without one)
 
 Distribution: one public git repo, `manifest.json` + README + LICENSE at root, list on [omarchyplugins.com](https://omarchyplugins.com). `omarchy plugin add` clones files only. It never runs an install hook and never asks for sudo.
@@ -292,10 +292,10 @@ Ship that. Use it for a week.
 
 - ~~Paste Cashu~~ — panel field in TOP UP posting to `/wallet/receive/cashu`. Token goes to curl over stdin, never argv or logs; the field clears before the request fires.
 - ~~Mint picker / trust UI~~ — scoped to what the daemon has: list (`/wallet/mints` ∪ `/balance` map), add (`POST /wallet/mints`), trust caveat copy. There is **no set-default or remove surface** — the active mint is cocod's first listed mint. The one real choice is the `mintUrl` on `POST /wallet/receive/bolt11`, so with >1 mint the rows select where Lightning top-ups land.
-- ~~Explicit Claude / Pi / OpenClaw toggles~~ — Connect rows per installed agent; Claude and OpenClaw confirm first (login hijack / default-model overwrite). Disconnect deletes the daemon client id, then jq-strips only our keys from the config (see DECISIONS.md "Surgical disconnect").
+- ~~Explicit Claude / Pi / OpenClaw toggles~~ — Connect rows per installed agent; Claude and OpenClaw confirm first (login hijack / default-model overwrite). Disconnect deletes the daemon client id, then jq-strips only our keys from the config.
 - ~~Model / provider picker~~ — resolved as: provider enable/disable (collapsed PROVIDERS section) plus a copy-`routstr/<id>` dropdown. routstrd has **no default-model surface** (`small_model` and the Claude env models are hardcoded or positional), so a picker would fight `refreshModelsAndIntegrations` and lie.
 - ~~Prepaid tab in first-party `omarchy.agents`~~ — the service writes `routstr.json` into `~/.local/state/omarchy/agents/usage/` (atomic dotted-mktemp + mv, content-keyed dedupe across per-monitor instances), shaped like `omarchy-agent-usage-fireworks`: balance in currency `SAT`, `hasPromptStats: false` because requests are not prompts.
-- Tor egress toggle — **dropped**: no daemon surface exists (see DECISIONS.md).
+- Tor egress toggle — **dropped**: no daemon surface exists.
 
 ### Out of scope
 

@@ -323,8 +323,8 @@ function disconnectScript(id, configPath, baseUrl) {
     // jq is checked before the daemon delete, not after. Deleting the client
     // record and then failing to clean the file leaves the config pointing at
     // a revoked key — for Claude Code, an agent that is broken *and* still
-    // bypassing the Anthropic login, which DECISIONS.md calls strictly worse
-    // than either connected or disconnected. Fail before touching anything.
+    // bypassing the Anthropic login, which is strictly worse than either
+    // connected or disconnected. Fail before touching anything.
     requireJqFragment()
     + "code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST"
     + " -H 'Content-Type: application/json' -d " + shellQuote(JSON.stringify({ id: String(id) })) + " "
