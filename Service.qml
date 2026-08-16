@@ -15,8 +15,11 @@ import "Model.js" as Model
 //   - `routstrd onboard` runs in a spawned terminal, output never captured
 //     (it prints the wallet mnemonic).
 //   - no secret-printing commands (`history --verbose`, `balance --api-keys`).
-//   - opencode.json is only ever written by `routstrd clients add`; this
-//     service just watches it and backs it up once before the first write.
+//   - agent configs are merged only by `routstrd clients add`; around that,
+//     this service backs each file up once before the first write, copies
+//     small_model into an empty OpenCode `model` once after a successful
+//     add, and surgically strips our keys on disconnect. It never edits
+//     routstrd's provider block by hand.
 Item {
   id: root
   visible: false
@@ -54,10 +57,10 @@ Item {
   property var modelOptions: []
   property string providerBusyUrl: ""
 
-  // Optimistic daemon toggle, tailscale-style: -1 follow reality, 0/1 while
-  // a start/stop is catching up.
-  property int _desired: -1
-  readonly property bool daemonActive: _desired === -1 ? daemonUp : (_desired === 1)
+  // Optimistic daemon toggle, tailscale-style: undefined follows reality;
+  // true/false is the target state while a start/stop catches up.
+  property var _desiredDaemonUp
+  readonly property bool daemonActive: _desiredDaemonUp === undefined ? daemonUp : _desiredDaemonUp === true
 
   // ---- OpenCode integration
   property bool opencodeWired: false
@@ -95,9 +98,13 @@ Item {
   readonly property string statusText: Model.statusLabel(probed, installed, onboarded, daemonUp, modelCount)
   readonly property bool lowBalance: daemonUp && balanceSats >= 0 && balanceSats < lowBalanceSats
   readonly property bool driftAlert: daemonUp && opencodeInstalled && _sawWired && !opencodeWired && !wireProcess.running
-  readonly property bool alert: lowBalance || driftAlert
+  // Keep-alive watch: an empty model list breaks agents just like drift
+  // does. -1 means "unknown", so only a real zero badges.
+  readonly property bool noModelsAlert: daemonUp && modelCount === 0
+  readonly property bool alert: lowBalance || driftAlert || noModelsAlert
   readonly property bool wiring: wireProcess.running
   readonly property bool receivingCashu: cashuProcess.running
+  readonly property bool creatingInvoice: invoiceProcess.running
   readonly property bool addingMint: addMintProcess.running
   readonly property bool busy: probeProcess.running || healthProcess.running || balanceProcess.running
     || keysProcess.running || modelsProcess.running || usageProcess.running || wireProcess.running
@@ -152,8 +159,6 @@ Item {
     return n
   }
 
-  function formatSats(n) { return Model.formatSats(n) }
-
   // ---- Notifications. One bar surface exists per monitor, so every
   // instance sees the same edge at the same time; an atomic mkdir in the
   // runtime dir lets exactly one of them speak.
@@ -204,8 +209,36 @@ Item {
     if (openclawInstalled) openclawConfig.reload()
   }
 
+  // Every Process is started through this, so each carries its own deadline.
+  //
+  // The alternative — one shared one-shot timer, armed by the first launch of
+  // a batch — reaped curls that had only just started: at the schema's
+  // minimum 5s refresh interval the 12s timer killed the t=10s health check
+  // at t=12s, and a health check killed mid-flight reads as daemonUp=false,
+  // which empties the panel and fires a *critical* "daemon stopped"
+  // notification about a daemon that is running fine. curl already carries
+  // --max-time, so graceSec sits past it: this only reaps a process that is
+  // genuinely wedged, never one that is merely slow.
+  function launch(proc, command, graceSec) {
+    proc.command = command
+    proc.deadline = Date.now() + graceSec * 1000
+    proc.running = true
+    if (!pollWatchdog.running) pollWatchdog.start()
+  }
+
+  // Everything launch() may have started, for the watchdog to sweep. wire
+  // and client are in here too: `routstrd clients add` fetches models over
+  // Nostr and can hang on a dead relay, and without a reap the Connect
+  // button spins forever and clientBusyId disables every agent row.
+  function timedProcesses() {
+    return [probeProcess, healthProcess, balanceProcess, keysProcess, modelsProcess,
+            usageProcess, mintsProcess, summaryProcess, providersProcess,
+            providerToggleProcess, wireProcess, clientProcess, invoiceProcess,
+            qrProcess, addMintProcess, cashuProcess, recordProcess]
+  }
+
   function probe() {
-    probeProcess.command = ["bash", "-lc",
+    launch(probeProcess, ["bash", "-lc",
       pathPrelude
       + "command -v routstrd >/dev/null 2>&1 && echo routstrd=yes || echo routstrd=no; "
       + "[ -e \"$HOME/.routstrd/config.json\" ] && echo config=yes || echo config=no; "
@@ -213,60 +246,32 @@ Item {
       + "command -v bun >/dev/null 2>&1 && echo bun=yes || echo bun=no; "
       + "command -v claude >/dev/null 2>&1 && echo claude=yes || echo claude=no; "
       + "{ command -v pi >/dev/null 2>&1 || [ -d \"$HOME/.pi/agent\" ]; } && echo pi=yes || echo pi=no; "
-      + "{ command -v openclaw >/dev/null 2>&1 || [ -e \"$HOME/.openclaw/openclaw.json\" ]; } && echo openclaw=yes || echo openclaw=no"]
-    probeProcess.running = true
+      + "{ command -v openclaw >/dev/null 2>&1 || [ -e \"$HOME/.openclaw/openclaw.json\" ]; } && echo openclaw=yes || echo openclaw=no"], 30)
   }
 
   function refreshDaemon() {
-    var launched = false
     refreshing = true
-    if (!healthProcess.running) {
-      healthProcess.command = curlGet("/health", 5)
-      healthProcess.running = true
-      launched = true
-    }
-    if (daemonUp || _desired === 1) {
+    if (!healthProcess.running) launch(healthProcess, curlGet("/health", 5), 12)
+    if (daemonUp || _desiredDaemonUp === true) {
       if (!balanceProcess.running) {
         _balanceRaw = ""
-        balanceProcess.command = curlGet("/balance", 5)
-        balanceProcess.running = true
-        launched = true
+        launch(balanceProcess, curlGet("/balance", 5), 12)
       }
-      if (!keysProcess.running) {
-        _keysRaw = ""
-        keysProcess.command = curlGet("/keys/balance", 5)
-        keysProcess.running = true
-        launched = true
-      }
-      if (!modelsProcess.running) {
-        modelsProcess.command = curlGet("/models", 8)
-        modelsProcess.running = true
-        launched = true
-      }
-      if (panelOpen && !usageProcess.running) {
-        usageProcess.command = curlGet("/usage?limit=1", 5)
-        usageProcess.running = true
-        launched = true
-      }
-      if (panelOpen && !mintsProcess.running) {
-        mintsProcess.command = curlGet("/wallet/mints", 5)
-        mintsProcess.running = true
-        launched = true
-      }
-      if (panelOpen && !providersProcess.running) {
-        providersProcess.command = curlGet("/providers", 8)
-        providersProcess.running = true
-        launched = true
-      }
+      // _keysRaw is deliberately NOT cleared here. A failed /keys/balance
+      // would then read as zero api-key sats, dropping the displayed balance
+      // by the whole session float — and a top-up started in that window
+      // captures the sunk figure as its baseline, so the next successful
+      // poll looks like the invoice was paid. Keep the last good value; the
+      // handler only overwrites it on success.
+      if (!keysProcess.running) launch(keysProcess, curlGet("/keys/balance", 5), 12)
+      if (!modelsProcess.running) launch(modelsProcess, curlGet("/models", 8), 16)
+      if (panelOpen && !usageProcess.running) launch(usageProcess, curlGet("/usage?limit=1", 5), 12)
+      if (panelOpen && !mintsProcess.running) launch(mintsProcess, curlGet("/wallet/mints", 5), 12)
+      if (panelOpen && !providersProcess.running) launch(providersProcess, curlGet("/providers", 8), 16)
       // Not panel-gated: the agents-panel usage record should stay fresh
       // in the background. The daemon caches this response for 60s.
-      if (!summaryProcess.running) {
-        summaryProcess.command = curlGet("/usage/summary", 8)
-        summaryProcess.running = true
-        launched = true
-      }
+      if (!summaryProcess.running) launch(summaryProcess, curlGet("/usage/summary", 8), 16)
     }
-    if (launched && !pollWatchdog.running) pollWatchdog.start()
   }
 
   function curlGet(path, timeoutSec) {
@@ -283,11 +288,21 @@ Item {
     var previous = balanceSats
     balanceSats = total
 
-    if (invoiceText !== "" && _invoiceBaseline >= 0 && total > _invoiceBaseline) {
-      var gained = total - _invoiceBaseline
-      notify("paid", "Top-up received", "+" + Model.formatSats(gained) + " sats — balance " + Model.formatSats(total) + " sats.")
-      clearInvoice()
-      flashStatus("Invoice paid")
+    if (invoiceText !== "") {
+      if (_invoiceBaseline < 0) {
+        // The invoice was created before any balance had landed — a fresh
+        // shell, or the daemon having just come up. Anchor on the first real
+        // reading instead of leaving the baseline at -1, which switched
+        // paid-detection off for the invoice's whole 30-minute life: the
+        // user pays, the balance visibly rises, and the QR sits there
+        // claiming to be waiting.
+        _invoiceBaseline = total
+      } else if (total > _invoiceBaseline) {
+        var gained = total - _invoiceBaseline
+        notify("paid", "Top-up received", "+" + Model.formatSats(gained) + " sats — balance " + Model.formatSats(total) + " sats.")
+        clearInvoice()
+        flashStatus("Invoice paid")
+      }
     }
 
     // Wallet and key balances land in separate responses; deciding "low"
@@ -315,17 +330,16 @@ Item {
     recordProcess.pendingKey = key
     recordProcess.pendingBody = JSON.stringify(record)
     recordProcess.stdinEnabled = true
-    recordProcess.command = ["bash", "-c",
+    launch(recordProcess, ["bash", "-c",
       "dir=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage\"; mkdir -p \"$dir\"; "
       + "tmp=$(mktemp \"$dir/.routstr.json.XXXXXX\") || exit 1; "
-      + "if cat > \"$tmp\"; then mv \"$tmp\" \"$dir/routstr.json\"; else rm -f \"$tmp\"; exit 1; fi"]
-    recordProcess.running = true
+      + "if cat > \"$tmp\"; then mv \"$tmp\" \"$dir/routstr.json\"; else rm -f \"$tmp\"; exit 1; fi"], 20)
   }
 
   function handleHealth(ok) {
     var was = _wasUp
     daemonUp = ok
-    if (_desired !== -1 && daemonUp === (_desired === 1)) _desired = -1
+    if (_desiredDaemonUp !== undefined && daemonUp === _desiredDaemonUp) _desiredDaemonUp = undefined
     if (ok) {
       startupRamp.running = false
       maybeAutoWire()
@@ -350,7 +364,8 @@ Item {
     // Fire-and-forget on purpose: if `routstrd start` ever ran its server in
     // the foreground, holding it in a Process object would tie the daemon's
     // life to this widget (and a watchdog reap would kill it).
-    _desired = 1
+    _desiredDaemonUp = true
+    desiredTimeout.restart()
     flashStatus("Starting daemon…")
     Quickshell.execDetached(["bash", "-lc", pathPrelude + "routstrd start"])
     startupRamp.ticks = 0
@@ -359,7 +374,8 @@ Item {
   }
 
   function stopDaemon() {
-    _desired = 0
+    _desiredDaemonUp = false
+    desiredTimeout.restart()
     flashStatus("Stopping daemon…")
     Quickshell.execDetached(["bash", "-lc", pathPrelude + "routstrd stop"])
     delayedRefresh.restart()
@@ -370,12 +386,6 @@ Item {
   function onboardInTerminal() {
     runInTerminal("routstrd onboard")
     flashStatus("Onboarding in terminal — finish there, then come back")
-  }
-
-  function installInTerminal() {
-    if (!bunInstalled) return
-    runInTerminal("bun i -g routstrd")
-    flashStatus("Installing routstrd in terminal")
   }
 
   function persistInTerminal() {
@@ -397,12 +407,20 @@ Item {
     userDisconnected = false
     flashStatus("Wiring OpenCode…")
     // Backup once before the first write, then let routstrd own the merge.
-    wireProcess.command = ["bash", "-lc",
+    // After a successful add, an empty top-level `model` gets routstrd's
+    // own cheap pick (small_model) — the spec's first-run default.
+    //
+    // The whole thing runs under a cross-instance lock: auto-wire fires on
+    // every monitor's Service at once, and three concurrent `clients add`
+    // read-modify-writing opencode.json is a lost update at best. Losers
+    // exit 75 and do nothing.
+    launch(wireProcess, ["bash", "-lc",
       pathPrelude
+      + Model.singleFlightFragment(runtimeDir + "/omarchy-routstr.wire.opencode")
       + "cfg=\"${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json\"; "
-      + "if [ -f \"$cfg\" ]; then set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; fi; "
-      + "exec routstrd clients add --opencode"]
-    wireProcess.running = true
+      + "if [ -f \"$cfg\" ]; then " + Model.backupOnceFragment() + "fi; "
+      + "routstrd clients add --opencode || exit $?; "
+      + Model.opencodeDefaultModelFragment()], 120)
   }
 
   function handleWired() {
@@ -410,7 +428,11 @@ Item {
     _sawWired = true
     _driftNotified = false
     flashStatus("OpenCode connected")
-    notify("wired", "OpenCode has Routstr models",
+    // The config parse lands async, so a fresh wire reports the daemon's
+    // model list — the same list `clients add` just wrote.
+    var n = opencodeModels > 0 ? opencodeModels : modelCount
+    notify("wired",
+      n > 0 ? "OpenCode has " + Model.countLabel(n, "Routstr model") : "OpenCode has Routstr models",
       "Press c and pick a routstr/ model. " + (balanceSats > 0 ? "" : "Top up to start making requests."))
   }
 
@@ -446,6 +468,14 @@ Item {
     "openclaw": { name: "OpenClaw", flag: "--openclaw", path: openclawConfigPath }
   })
 
+  // The FileView watching each explicit client's config, keyed by the same
+  // ids as clientSpecs, for post-action reloads.
+  readonly property var clientViews: ({
+    "claude-code": claudeConfig,
+    "pi-agent": piConfig,
+    "openclaw": openclawConfig
+  })
+
   function wireClient(id) {
     var spec = clientSpecs[id]
     if (!spec || clientProcess.running || !installed || !daemonUp) return
@@ -453,12 +483,11 @@ Item {
     clientProcess.clientId = id
     clientProcess.verb = "connect"
     flashStatus("Wiring " + spec.name + "…")
-    clientProcess.command = ["bash", "-lc",
+    launch(clientProcess, ["bash", "-lc",
       pathPrelude
       + "cfg=" + Util.shellQuote(spec.path) + "; "
-      + "if [ -f \"$cfg\" ]; then set -- \"$cfg\".bak-routstr-*; [ -e \"$1\" ] || cp -p \"$cfg\" \"$cfg.bak-routstr-$(date +%Y%m%d%H%M%S)\"; fi; "
-      + "exec routstrd clients add " + spec.flag]
-    clientProcess.running = true
+      + "if [ -f \"$cfg\" ]; then " + Model.backupOnceFragment() + "fi; "
+      + "exec routstrd clients add " + spec.flag], 120)
   }
 
   function disconnectClient(id) {
@@ -470,8 +499,7 @@ Item {
     flashStatus("Disconnecting " + spec.name + "…")
     // Script text lives in Model.js so the test suite executes the exact
     // same bytes against fixture configs. Rationale for its shape is there.
-    clientProcess.command = ["bash", "-c", Model.disconnectScript(id, spec.path, baseUrl)]
-    clientProcess.running = true
+    launch(clientProcess, ["bash", "-c", Model.disconnectScript(id, spec.path, baseUrl)], 120)
   }
 
   function handleClientExit(id, verb, exitCode, errorText) {
@@ -482,16 +510,23 @@ Item {
     } else {
       setError(errorText, "Could not " + verb + " " + spec.name)
     }
-    if (id === "claude-code") claudeConfig.reload()
-    else if (id === "pi-agent") piConfig.reload()
-    else openclawConfig.reload()
+    var view = clientViews[id]
+    if (view) view.reload()
   }
 
   // ---- Invoice -------------------------------------------------------------
 
+  // Takes a chip's int or a typed string; Model owns the parsing and the
+  // bounds. Returns the amount an invoice was requested for, or 0 when
+  // nothing was launched (unusable amount, daemon down, one already out).
   function createInvoice(sats) {
-    var amount = parseInt(String(sats), 10)
-    if (!isFinite(amount) || amount <= 0 || invoiceProcess.running || !daemonUp) return
+    if (invoiceProcess.running || !daemonUp) return 0
+    var amount = Model.normalizeTopupSats(sats)
+    if (amount === 0) {
+      lastError = Model.topupError()
+      return 0
+    }
+    lastError = ""
     clearInvoice()
     invoiceSats = amount
     _invoiceBaseline = balanceSats
@@ -499,11 +534,15 @@ Item {
     flashStatus("Creating invoice…")
     var body = { amount: amount }
     if (topupMintUrl !== "") body.mintUrl = topupMintUrl
-    invoiceProcess.command = ["curl", "-fsS", "--max-time", "15",
+    // No -f, same reason as the cashu redeem: when the mint rejects the
+    // amount the daemon's {error} body is the only thing that tells the user
+    // what to change, and -f throws the body away in favour of
+    // "curl: (22) The requested URL returned error: 400".
+    launch(invoiceProcess, ["curl", "-sS", "--max-time", "15",
       "-X", "POST", "-H", "Content-Type: application/json",
       "-d", JSON.stringify(body),
-      baseUrl + "/wallet/receive/bolt11"]
-    invoiceProcess.running = true
+      baseUrl + "/wallet/receive/bolt11"], 30)
+    return amount
   }
 
   // ---- Mints ---------------------------------------------------------------
@@ -519,8 +558,7 @@ Item {
     if (providerToggleProcess.running || !daemonUp) return
     providerBusyUrl = String(url)
     flashStatus((disable ? "Disabling " : "Enabling ") + Model.hostOf(url) + "…")
-    providerToggleProcess.command = ["bash", "-c", Model.providerToggleScript(url, disable, baseUrl)]
-    providerToggleProcess.running = true
+    launch(providerToggleProcess, ["bash", "-c", Model.providerToggleScript(url, disable, baseUrl)], 30)
   }
 
   function copyModelRef(id) {
@@ -538,19 +576,17 @@ Item {
     }
     lastError = ""
     flashStatus("Adding mint…")
-    addMintProcess.command = ["curl", "-sS", "--max-time", "20",
+    launch(addMintProcess, ["curl", "-sS", "--max-time", "20",
       "-X", "POST", "-H", "Content-Type: application/json",
       "-d", JSON.stringify({ url: url }),
-      baseUrl + "/wallet/mints"]
-    addMintProcess.running = true
+      baseUrl + "/wallet/mints"], 35)
   }
 
   function renderQr() {
     if (invoiceText === "") return
     invoiceQrReady = false
-    qrProcess.command = ["bash", "-c",
-      "qrencode -o " + Util.shellQuote(qrPath) + " -s 5 -m 2 " + Util.shellQuote("lightning:" + invoiceText)]
-    qrProcess.running = true
+    launch(qrProcess, ["bash", "-c",
+      "qrencode -o " + Util.shellQuote(qrPath) + " -s 5 -m 2 " + Util.shellQuote("lightning:" + invoiceText)], 20)
   }
 
   function clearInvoice() {
@@ -586,11 +622,13 @@ Item {
     token = ""
     // No -f: on an HTTP error the daemon's {error} body is the message
     // worth showing ("Invalid token", "already spent"), and -f discards it.
-    cashuProcess.command = ["curl", "-sS", "--max-time", "30",
-      "-X", "POST", "-H", "Content-Type: application/json",
-      "-d", "@-", baseUrl + "/wallet/receive/cashu"]
     cashuProcess.stdinEnabled = true  // re-arm; each run closes it after writing
-    cashuProcess.running = true
+    // A generous grace: curl's own --max-time 30 is what should end a slow
+    // redeem. This only catches a process wedged past that, and reaping a
+    // redeem that is genuinely in flight is not something to do eagerly.
+    launch(cashuProcess, ["curl", "-sS", "--max-time", "30",
+      "-X", "POST", "-H", "Content-Type: application/json",
+      "-d", "@-", baseUrl + "/wallet/receive/cashu"], 60)
   }
 
   function handleCashuExit(exitCode, stdoutText, stderrText) {
@@ -662,19 +700,41 @@ Item {
 
   Timer {
     // curl carries --max-time, so this is the belt for anything else wedged.
+    // It sweeps rather than fires once: each process is reaped against its
+    // own deadline (set by launch()), so a slow call started late in a batch
+    // is never killed on another call's clock. Runs only while something is
+    // actually in flight.
     id: pollWatchdog
-    interval: 12000
-    repeat: false
+    interval: 2000
+    repeat: true
+    running: false
     onTriggered: {
-      if (healthProcess.running) healthProcess.running = false
-      if (balanceProcess.running) balanceProcess.running = false
-      if (keysProcess.running) keysProcess.running = false
-      if (modelsProcess.running) modelsProcess.running = false
-      if (usageProcess.running) usageProcess.running = false
-      if (mintsProcess.running) mintsProcess.running = false
-      if (summaryProcess.running) summaryProcess.running = false
-      if (providersProcess.running) providersProcess.running = false
+      var list = root.timedProcesses()
+      var now = Date.now()
+      var anyRunning = false
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i]
+        if (!p.running) continue
+        if (p.deadline > 0 && now >= p.deadline) p.running = false  // SIGTERM
+        else anyRunning = true
+      }
+      if (!anyRunning) pollWatchdog.stop()
     }
+  }
+
+  Timer {
+    // The daemon toggle is optimistic, and start/stop go out through
+    // execDetached on purpose (holding routstrd in a Process would tie its
+    // life to this widget) — so there is no exit code to fail on. Without a
+    // deadline, a `routstrd start` that never comes up (port taken, corrupt
+    // config) left _desiredDaemonUp pinned true for the session: the hero
+    // switch showed ON, the button spun "Starting…" forever, and
+    // refreshDaemon kept firing four extra polls a tick at a dead daemon.
+    // Reality wins after this; handleHealth clears it sooner when they agree.
+    id: desiredTimeout
+    interval: 32000
+    repeat: false
+    onTriggered: root._desiredDaemonUp = undefined
   }
 
   Timer {
@@ -761,7 +821,13 @@ Item {
 
   // ---- Processes -----------------------------------------------------------
 
-  Process {
+  // Process plus the one thing every launch needs: when it is overdue.
+  // launch() stamps it; pollWatchdog reaps against it.
+  component TimedProcess: Process {
+    property double deadline: 0
+  }
+
+  TimedProcess {
     id: probeProcess
     running: false
     command: []
@@ -780,7 +846,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: healthProcess
     running: false
     command: []
@@ -792,7 +858,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: balanceProcess
     running: false
     command: []
@@ -803,19 +869,24 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: keysProcess
     running: false
     command: []
-    stdout: StdioCollector { id: keysStdout; waitForEnd: true; onStreamFinished: root._keysRaw = text }
+    stdout: StdioCollector { id: keysStdout; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
-      // Keys are additive detail; settle with whatever the wallet call said.
+      // Only a successful response replaces the api-key float. Settling on a
+      // failed one counted it as zero, which showed up as the balance
+      // dropping by the whole session float and, mid-invoice, as a phantom
+      // "Top-up received" when the next poll put it back.
+      if (exitCode !== 0) return
+      root._keysRaw = keysStdout.text
       root.settleBalance()
     }
   }
 
-  Process {
+  TimedProcess {
     id: modelsProcess
     running: false
     command: []
@@ -829,7 +900,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: providersProcess
     running: false
     command: []
@@ -840,7 +911,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: providerToggleProcess
     running: false
     command: []
@@ -851,14 +922,11 @@ Item {
       if (exitCode === 0) root.lastError = ""
       else root.setError(providerToggleStderr.text, "Could not change the provider")
       // Re-read the authoritative list either way.
-      if (!providersProcess.running) {
-        providersProcess.command = root.curlGet("/providers", 8)
-        providersProcess.running = true
-      }
+      if (!providersProcess.running) root.launch(providersProcess, root.curlGet("/providers", 8), 16)
     }
   }
 
-  Process {
+  TimedProcess {
     id: usageProcess
     running: false
     command: []
@@ -869,7 +937,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: wireProcess
     running: false
     command: []
@@ -879,6 +947,10 @@ Item {
       if (exitCode === 0) {
         root.lastError = ""
         root.handleWired()
+      } else if (exitCode === Model.exTempfail()) {
+        // A peer instance holds the wire lock and is doing the work. Not an
+        // error and not ours to report — the config watcher publishes the
+        // result to every instance.
       } else {
         root.setError(String(wireStderr.text || wireStdout.text || ""), "routstrd clients add failed")
       }
@@ -886,7 +958,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: invoiceProcess
     running: false
     command: []
@@ -906,7 +978,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: qrProcess
     running: false
     command: []
@@ -918,7 +990,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: summaryProcess
     running: false
     command: []
@@ -931,7 +1003,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: recordProcess
     property string pendingKey: ""
     property string pendingBody: ""
@@ -949,7 +1021,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: clientProcess
     property string clientId: ""
     property string verb: ""
@@ -967,7 +1039,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: mintsProcess
     running: false
     command: []
@@ -980,7 +1052,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: addMintProcess
     running: false
     command: []
@@ -998,7 +1070,7 @@ Item {
     }
   }
 
-  Process {
+  TimedProcess {
     id: cashuProcess
     property string pendingBody: ""
     running: false
