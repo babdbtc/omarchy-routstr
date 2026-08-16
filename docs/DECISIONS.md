@@ -84,6 +84,14 @@ The one accepted exception to "never hand-edit agent configs from the plugin". `
 
 ## Rejected auto-integration behaviors
 
+### Auto-wire OpenCode on first run — replaced by a Connect click
+
+Auto-integration is the product, so `autoWireOpencode` shipped on: daemon answers, OpenCode is installed, `clients add --opencode` runs, done. Additive, backed up once, `model` touched only when empty — defensible, and still the wrong default.
+
+The write lands in `~/.config/opencode/opencode.json`, a file this plugin does not own, before the user has asked for anything. Enabling a bar widget is consent to draw in the bar; it is not consent to edit another program's config. The marketplace asks submitters to affirm exactly that ("does not overwrite user configuration without explicit consent"), and the affirmation should be true without a paragraph of qualification.
+
+The click costs almost nothing: first run already walks install → onboard-in-terminal → start → fund, so Connect is one more button in a flow that is manual by design. `autoWireOpencode` stays as an opt-in for people who want it unattended across machines. Drift Repair is likewise a click — it re-adds a block the user asked for, but they still get to see it happen.
+
 ### Auto-wire Claude Code
 
 `routstrd`’s Claude integration overwrites `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. That is a hijack of a paid Anthropic login. Explicit toggle only, with copy that says so.
