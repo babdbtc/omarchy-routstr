@@ -207,6 +207,23 @@ One section, not a wizard. Each row: name, installed / missing, connected / stal
 
 Primary action for v1: **Connect OpenCode**. Claude is a toggle: “Routes Claude Code through Routstr instead of Anthropic.”
 
+A wired row must answer *“can I go and use it now?”*, not *“did the write succeed?”* — the two come apart whenever the wallet is empty or the model list is, and a row that only says “Connected” leaves the user hunting for the missing step in the MODELS and PROVIDERS sections below, which are the two places they never need to touch. So a connected row reads **“Ready to use · <detail>”** once sats and models are both there, and names the blocker otherwise (`Model.agentReadyLabel`). Both facts are daemon-wide, so every row derives them from one place (`Panel.agentsUsable`).
+
+**The label carries the state, in colour.** A wired row's subtitle is green when ready, `urgent` when a blocker is named, and `dim` while the daemon has not been polled yet; the mark beside it takes the same colour and changes shape (`󰄬` / `󰀦`) so the state still lands without colour. An unwired row's subtitle stays `dim` — it is describing itself, not making a claim.
+
+One state function decides all three (`Model.agentState` → `ready` / `unknown` / `no-models` / `no-agent-models` / `no-funds`), so the label, the glyph and the colour cannot disagree. Two rules it encodes are worth stating, because both were bugs first:
+
+- **A positive claim needs positive evidence.** `-1` means "not polled yet", and `noModelsAlert` treats an unknown as *not a failure* before it badges the bar — but the reverse does not follow. Service resets both counts to `-1` when the daemon drops, and the AGENTS section renders as soon as `daemonUp` flips, one round-trip before the balance lands. Reading `-1` as ready flashes a green all-clear over an empty wallet on every daemon start. `Service.qml`'s wired notification already gates on `balanceSats > 0` for the same reason.
+- **Readiness is per-agent, not just daemon-wide.** `opencodeState` returns `wired: true, models: 0` for a provider block with no `models` key, so gating only on the daemon's count produced "Ready to use · 0 models" — in green, with a tick. Each row passes the count from its own config, or `-1` when it does not track one (Claude takes its three models positionally). `test/labels.test.mjs` walks every combination to assert a ready claim and a zero count can never co-occur.
+
+The trailing text has two ranks, and the distinction is load-bearing. A **detail** describes the current config — a model count — and yields to a named blocker, since one elided line is better spent on what is wrong. A **note** is a standing warning about what wiring did to the machine: Claude Code's bypassed Anthropic login, the side effect its confirm dialog exists for. A note outranks both, and specifically outranks the blocker, because a blocker is recoverable and stateless while the side effect persists until Disconnect. It is also the answer to "why is this agent behaving strangely" — a question asked precisely when something else is wrong too. So in a blocked state the note *leads* (`Anthropic login bypassed · top up to use it`), where `ElideRight` cannot eat it. Claude is the only row with one.
+
+The green is the plugin's own (`Panel.readyColor`), not the theme's, and that is deliberate rather than lazy. `Color` exposes no green role at all — only foreground / background / accent / urgent / muted — and the palettes underneath do not agree on what green is. The 22 shipped themes use a named `green` key, genuinely green in 13 and purple (`lupine` `#4a2fd0`), amber (`matte-black` `#FFC107`, whose `yellow` is `#b91c1c`, i.e. red) or flat grey (`vantablack`, `white`, `solitude`) in the rest. The themes installed here use the ANSI `color2` slot instead and define no `green` key at all — `rose-pine-moon`'s `color2` is `#3e8fb0`, the same teal as its accent — and `aether` ships no `colors.toml` whatsoever. Reaching past `Color` to parse the file would additionally go stale on every live theme switch, since those arrive over shell IPC and `Color.colorsFile` is deliberately `watchChanges: false`.
+
+So: one value we control, in two variants picked by `Color.popups.background.hslLightness` — the surface the panel actually paints on (`KeyboardPanel`), not the foundational `background`, which a user `shell.toml` can diverge from. `#a6e3a1` reads at 11.9:1 on rose-pine-moon's `#191724` and collapses to 1.31:1 on catppuccin-latte's `#eff1f5`, so light themes get `#2d6a30` (5.8:1). The light variant is 10px caption text, so 4.5:1 is the bar it must clear rather than 3:1; `#2e7d32` cleared it by 0.03 and the next slightly darker light background would have failed. `urgent` stays theme-supplied — `Color.loadColors` takes it from `red`/`color1`, and this panel already spends it on the low-balance warning and OpenCode drift.
+
+Corollary: the sections a connected user does *not* need lead with “Optional”, and the MODELS caption sits **above** its dropdown rather than below — a note underneath is read after the control has already been mistaken for a required step.
+
 ## Bar and panel
 
 **Bar**
@@ -223,7 +240,7 @@ Primary action for v1: **Connect OpenCode**. Claude is a toggle: “Routes Claud
 - Top-up chips: 210 / 2100 / 21k sats, plus a custom-amount field → Lightning QR from `POST /wallet/receive/bolt11`, plus paste `cashuA…` / `cashuB…` (the private path).
 - Mint list with per-mint sats, add-mint, trust caveat; with >1 mint, rows pick where invoices land.
 - Integrations list (above) with explicit Claude / Pi / OpenClaw toggles.
-- Copy-`routstr/<id>` model dropdown; collapsed provider enable/disable list.
+- Copy-`routstr/<id>` model dropdown; collapsed provider enable/disable list. Both marked optional — a connected agent already has every model, and routing already picks a provider.
 - Now: model, last request cost (`/usage?limit=1`).
 - Low-balance copy that points at the QR, not at a docs page.
 
