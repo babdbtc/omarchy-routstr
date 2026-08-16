@@ -1,9 +1,5 @@
 # Design
 
-Captured 2026-08-15 after Omarchy 4.0 (Quattro) shipped. Source conversation: first plugin idea (Bitcoin / Monero / Cashu / Lightning / Tor) → Routstr as the intersection of those rails with Omarchy’s AI-first desktop → auto-wiring OpenCode so the user never edits agent config by hand.
-
-Verified 2026-08-15 against the shipped Quattro tree (`$OMARCHY_PATH`, 4.0.0.alpha — manifest schema, tooling, agents usage dir) and routstrd `main` (`src/cli.ts` — command surface, onboard output, service subcommands).
-
 This file is the spec. Implement against it. Change it when the product changes.
 
 ## Problem
@@ -23,24 +19,6 @@ Without a widget, that is a Bun install, an onboard command, a Lightning invoice
 Enable the widget, pay a Lightning invoice, press `c`. Models are just there.
 
 True from the second session on. The first session includes a one-time terminal detour (install Bun + `routstrd`, run `onboard`) that the panel walks through but must not perform itself.
-
-## Why Routstr, not a wallet or Tor
-
-The marketplace (~208 community plugins listed on [omarchyplugins.com](https://omarchyplugins.com) as of 2026-08-15, plus first-party) already has:
-
-| Nearby | Why it is not this |
-| --- | --- |
-| `omarchy.tailscale` | The *shape* to copy (bar + panel + local CLI). Not the job. |
-| WireGuard + ~7 VPN widgets | Commercial / corporate VPNs. No Tor. |
-| [Omastonk](https://github.com/brianblakely/omastonk) | Market quotes. BTC-USD will land there. |
-| [Portfolio Tracker](https://github.com/paul-paliychuk/omarchy-portfolio-tracker) | Local ledger + Yahoo quotes. |
-| `omarchy.agents` + many usage widgets | Display-only. Assume you already paid OpenAI / Anthropic / Fireworks. |
-
-Empty as of 2026-08-15: Bitcoin, Lightning, Cashu, Monero, Tor, mempool, Routstr.
-
-A generic wallet in the bar is the wrong runtime. Quattro plugins are unsandboxed QML inside the long-lived `omarchy-shell` process and update by `git pull`. Spend keys do not belong there.
-
-Routstr is the job the desktop already has: keep the coding agent funded and pointed at a working model. Cashu and Lightning are the rail, not the product. Tor can be a later egress toggle on the daemon.
 
 ## Architecture
 
