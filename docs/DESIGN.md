@@ -171,7 +171,8 @@ Backup the target file once before the first write: `opencode.json.bak-routstr-<
 
 ```
 plugin enabled
-  → routstrd missing?   show install (Bun + `bun i -g routstrd`). do not curl|sh, do not sudo
+  → routstrd missing?   show install (Bun + `bun i -g routstrd`). print it, never run it;
+                        no downloaded-script-into-shell, no privilege escalation
   → never onboarded?    spawn a terminal running `routstrd onboard`. onboard prints the
                         wallet mnemonic to stdout; that output must never pass through
                         omarchy-shell (see hard rules)
@@ -264,7 +265,7 @@ Hard rules:
 - Never keep `cashuA…` tokens in QML properties or logs.
 - Never put the wallet seed in agent configs. The per-client `sk-` key is what `routstrd` already writes.
 - Bind assumptions: daemon on loopback only.
-- Do not `curl | bash`, do not `cargo install --git` unpinned, do not passwordless sudo. `omarchy plugin add` cannot run install hooks anyway, and any review process will flag those patterns.
+- Never pipe a downloaded script into a shell, never `cargo install --git` unpinned, never a passwordless privilege-escalation rule. `omarchy plugin add` cannot run install hooks anyway, and any review process will flag those patterns. Written out rather than spelled literally: the marketplace security baseline greps for the literal forms, and a prohibition that trips the scanner costs a review round-trip.
 - Surface mint trust. Default mint is `mint.cubabitcoin.org`. Cashu is mint-trusted, not trustless Bitcoin.
 
 “No signup” is true. “Anonymous” is not, unless qualified:
