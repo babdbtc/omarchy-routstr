@@ -490,7 +490,7 @@ Panel {
                 id: cashuField
                 Layout.fillWidth: true
                 password: true
-                placeholderText: "Paste a Cashu token (cashuA…)"
+                placeholderText: "Paste a Cashu token (cashuA… / cashuB…)"
                 foreground: root.foreground
                 font.family: root.fontFamily
                 enabled: root.ready && !root.service.receivingCashu

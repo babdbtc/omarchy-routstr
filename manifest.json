@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "babdbtc",
   "license": "MIT",
-  "description": "Fund Routstr and connect OpenCode in one click, so Omarchy agents can buy inference with Lightning or Cashu. No account.",
+  "description": "Buy Routstr AI inference privately: fund a local routstrd with Lightning or Cashu, watch the balance, top up from the bar. No account.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "Routstr",
-    "description": "Balance, Lightning top-up, and OpenCode auto-integration for routstrd.",
+    "description": "Routstr balance in the bar, with Lightning and Cashu top-up. Optionally points OpenCode and friends at the daemon.",
     "category": "Widgets",
     "allowMultiple": false,
     "defaultSection": "right",
