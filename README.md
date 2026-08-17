@@ -48,7 +48,7 @@ omarchy plugin add https://github.com/babdbtc/omarchy-routstr.git --enable
 
 You need Omarchy Quattro, [Bun](https://bun.sh), and `routstrd`.
 
-`omarchy plugin add` only clones the repo. It cannot run install hooks, and this plugin never asks for sudo. The panel prints the commands to install Bun, install `routstrd`, create the wallet, and start the daemon. You run those yourself.
+`omarchy plugin add` only clones the repo, and it cannot run install hooks. No sudo or pkexec is required. The panel prints the commands to install Bun, install `routstrd`, create the wallet, and start the daemon, and you run those yourself.
 
 It also calls `curl`, `jq`, `qrencode`, `wl-copy`, `notify-send`, and `omarchy-launch-terminal`. Those are Omarchy base packages. If a tool the plugin needs a result from is missing, the panel names it. Copy, notifications, and opening a terminal fail silently if those helpers are gone.
 
