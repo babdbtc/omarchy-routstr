@@ -1,5 +1,11 @@
 # Omarchy Routstr
 
+[Omarchy plugin marketplace](https://omarchyplugins.com/plugin.html?id=io.github.babdbtc.routstr)
+
+```sh
+omarchy plugin add https://github.com/babdbtc/omarchy-routstr.git --enable
+```
+
 An [Omarchy](https://omarchy.org) plugin for buying [Routstr](https://routstr.com) AI inference privately.
 
 Routstr is pay-per-request inference with Bitcoin. You pay with Lightning or Cashu, there is no account to create, and there is no KYC or API-key dashboard. This plugin is the bar and panel for that on Omarchy: you fund a local [`routstrd`](https://github.com/Routstr/routstrd), see what is left, and top up when it runs low.
@@ -41,10 +47,6 @@ This is optional. The main job of the plugin is funding Routstr, not running an 
 Connect runs `routstrd clients add` with the matching flag (`--opencode`, `--claude-code`, `--pi-agent`, `--openclaw`). Disconnect deletes the daemon-side client, then removes only Routstr’s keys from the file.
 
 ## Install
-
-```sh
-omarchy plugin add https://github.com/babdbtc/omarchy-routstr.git --enable
-```
 
 You need Omarchy Quattro, [Bun](https://bun.sh), and `routstrd`.
 
