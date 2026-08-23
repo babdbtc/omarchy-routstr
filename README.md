@@ -12,7 +12,7 @@ Routstr is pay-per-request inference with Bitcoin. You pay with Lightning or Cas
 
 This project is not affiliated with Routstr. It drives their daemon. Tested against routstrd 0.3.11.
 
-![Routstr panel under the bar widget. Balance, Lightning and Cashu top-up, the active mint, and optional Connect buttons for OpenCode, Claude Code, and Pi.](preview.png)
+https://github.com/user-attachments/assets/446eb43b-b6b6-4002-84d6-7f69d20e3a0f
 
 ## What it does
 
